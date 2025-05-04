@@ -95,6 +95,11 @@ namespace MetalFlowScheduler.Api.Application.Services
             }
 
             // Gerar JWT
+
+            //var _jwtSecret = builder.Configuration["JwtSettings--Secret"];
+            //var _jwtIssuer = builder.Configuration["JwtSettings--Issuer"];
+            //var _jwtAudience = builder.Configuration["JwtSettings--Audience"];
+
             var tokenHandler = new JwtSecurityTokenHandler();
             var jwtSettings = _configuration.GetSection("JwtSettings");
             var key = Encoding.ASCII.GetBytes(jwtSettings["Secret"]);

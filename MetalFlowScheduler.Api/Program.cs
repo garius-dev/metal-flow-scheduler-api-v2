@@ -19,6 +19,9 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using Google.Cloud.SecretManager.V1;
 using Gcp.SecretManager.Provider;
+using MetalFlowScheduler.Api.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Debug()
@@ -57,6 +60,22 @@ else
 {
     Log.Warning("Configuração 'GoogleCloud:ProjectId' não encontrada. O provedor do Secret Manager não será adicionado.");
 }
+
+
+// --- Configuração do bind das configs --- 
+
+var _jwtSecret = builder.Configuration["JwtSettings--Secret"];
+var _jwtIssuer = builder.Configuration["JwtSettings--Issuer"];
+var _jwtAudience = builder.Configuration["JwtSettings--Audience"];
+var _jwtExpiration = builder.Configuration["JwtSettings--ExpirationInMinutes"];
+
+if (string.IsNullOrEmpty(_jwtIssuer) || string.IsNullOrEmpty(_jwtAudience) || string.IsNullOrEmpty(_jwtSecret) || string.IsNullOrEmpty(_jwtExpiration))
+{
+    throw new Exception("Configuração JWT não encontrada. Verifique se as chaves JwtSettings--Issuer, JwtSettings--Audience, JwtSettings--ExpirationInMinutes e JwtSettings--Secret estão definidas.");
+}
+
+JwtSecrets jwtSecretBinder = new JwtSecrets(_jwtSecret, _jwtIssuer, _jwtAudience, _jwtExpiration);
+builder.Services.AddSingleton(Options.Create(jwtSecretBinder));
 
 
 // --- Configuração do PostgreSQL --- 
@@ -129,16 +148,9 @@ builder.Services.AddControllers();
 
 // --- Configuração de Autenticação JWT ---
 
-var _jwtSecret = builder.Configuration["JwtSettings--Secret"];
-var _jwtIssuer = builder.Configuration["JwtSettings--Issuer"];
-var _jwtAudience = builder.Configuration["JwtSettings--Audience"];
 
-if(string.IsNullOrEmpty(_jwtIssuer) || string.IsNullOrEmpty(_jwtAudience) || string.IsNullOrEmpty(_jwtSecret))
-{
-    throw new Exception("Configuração JWT não encontrada. Verifique se as chaves JwtSettings--Issuer, JwtSettings--Audience e JwtSettings--Secret estão definidas.");
-}
 
-var key = Encoding.ASCII.GetBytes(_jwtSecret);
+var key = Encoding.ASCII.GetBytes(jwtSecretBinder.Secret);
 
 builder.Services.AddAuthentication(options =>
 {
@@ -160,9 +172,9 @@ builder.Services.AddAuthentication(options =>
         ValidateIssuerSigningKey = true, // Valida a assinatura do token usando a chave secreta
         IssuerSigningKey = new SymmetricSecurityKey(key), // A chave secreta usada para validar
         ValidateIssuer = true, // Valida se o emissor do token é o esperado
-        ValidIssuer = _jwtIssuer, // O emissor esperado (definido em appsettings ou user-secrets)
+        ValidIssuer = jwtSecretBinder.Issuer, // O emissor esperado (definido em appsettings ou user-secrets)
         ValidateAudience = true, // Valida se o público do token é o esperado
-        ValidAudience = _jwtAudience, // O público esperado (definido em appsettings ou user-secrets)
+        ValidAudience = jwtSecretBinder.Audience, // O público esperado (definido em appsettings ou user-secrets)
         ValidateLifetime = true, // Valida se o token não expirou
         ClockSkew = TimeSpan.Zero // Define a tolerância de tempo para expiração (zero é mais rigoroso)
     };
