@@ -1,4 +1,6 @@
 ﻿using MetalFlowScheduler.Api.Domain.Entities;
+using MetalFlowScheduler.Api.Domain.Entities.Identity;
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using System.Reflection;
 
@@ -7,7 +9,7 @@ namespace MetalFlowScheduler.Api.Infrastructure.Data
     /// <summary>
     /// Contexto do banco de dados para a aplicação, usando Entity Framework Core.
     /// </summary>
-    public class ApplicationDbContext : DbContext
+    public class ApplicationDbContext : IdentityDbContext<ApplicationUser, ApplicationRole, int>
     {
         public DbSet<Product> Products { get; set; }
         public DbSet<Line> Lines { get; set; }

@@ -12,6 +12,13 @@ using MetalFlowScheduler.Api.Domain.Interfaces;
 using MetalFlowScheduler.Api.Infrastructure.Data.Repositories;
 using MetalFlowScheduler.Api.Application.Interfaces;
 using MetalFlowScheduler.Api.Application.Services;
+using MetalFlowScheduler.Api.Domain.Entities.Identity;
+using Microsoft.AspNetCore.Identity;
+using System.Text;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using Google.Cloud.SecretManager.V1;
+using Gcp.SecretManager.Provider;
 
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Debug()
@@ -24,16 +31,75 @@ Log.Logger = new LoggerConfiguration()
 
 var builder = WebApplication.CreateBuilder(args);
 
-// --- Configuração do PostgreSQL --- 
-builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("PostgreDevelopConnection"),
-        npgsqlOptionsAction: sqlOptions =>
+
+var googleCloudProjectId = builder.Configuration["GoogleCloud:ProjectId"];
+
+if (!string.IsNullOrEmpty(googleCloudProjectId))
+{
+    // **VERIFIQUE SE O PACOTE NuGet Gcp.SecretManager.Provider ESTÁ INSTALADO E RESTAURADO**
+    // O método AddGcpSecretManager é um método de extensão no IConfigurationBuilder (que builder.Configuration implementa)
+    builder.Configuration.AddGcpSecretManager( // <-- Método CORRETO
+        options =>
         {
-            sqlOptions.EnableRetryOnFailure(
-                maxRetryCount: 5,
-                maxRetryDelay: TimeSpan.FromSeconds(30),
-                errorCodesToAdd: null);
-        }));
+            options.ProjectId = googleCloudProjectId; // O ProjectId agora é configurado nas opções
+            // Opcional: Adicionar um prefixo se seus segredos no Secret Manager tiverem um (ex: "MyApiSecrets-")
+            // options.SecretPrefix = "MyApiSecrets-"; // Note: O nome da opção pode variar no pacote
+
+            // Opcional: Configurar credenciais explicitamente (geralmente não necessário com ADC)
+            // options.CredentialsPath = "/caminho/para/sua/chave-conta-servico.json";
+
+            // Opcional: Configurar outras opções específicas deste provedor
+            // Consulte a documentação do pacote Gcp.SecretManager.Provider para opções adicionais.
+        });
+    Log.Information("Provedor de configuração do Google Cloud Secret Manager adicionado para o projeto: {ProjectId}", googleCloudProjectId);
+}
+else
+{
+    Log.Warning("Configuração 'GoogleCloud:ProjectId' não encontrada. O provedor do Secret Manager não será adicionado.");
+}
+
+
+// --- Configuração do PostgreSQL --- 
+var _connectionString = builder.Configuration["ConnectionStrings--PostgreDevelopConnection"];
+builder.Services.AddDbContext<ApplicationDbContext>(options =>
+options.UseNpgsql(_connectionString,
+    npgsqlOptionsAction: sqlOptions =>
+    {
+        sqlOptions.EnableRetryOnFailure(
+            maxRetryCount: 5,
+            maxRetryDelay: TimeSpan.FromSeconds(30),
+            errorCodesToAdd: null);
+    }));
+
+// --- Configuração do Identity --- // Adicionado
+builder.Services.AddIdentity<ApplicationUser, ApplicationRole>(options =>
+{
+    // Configurações de senha (ajuste conforme sua política de segurança)
+    options.Password.RequireDigit = true;
+    options.Password.RequiredLength = 8;
+    options.Password.RequireNonAlphanumeric = true;
+    options.Password.RequireUppercase = true;
+    options.Password.RequireLowercase = true;
+    options.Password.RequiredUniqueChars = 1;
+
+    // Configurações de Lockout (bloqueio de conta)
+    options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(5);
+    options.Lockout.MaxFailedAccessAttempts = 5;
+    options.Lockout.AllowedForNewUsers = true;
+
+    // Configurações de usuário
+    options.User.AllowedUserNameCharacters =
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._@+";
+    options.User.RequireUniqueEmail = true; // Requer email único
+
+    // Configurações de SignIn
+    options.SignIn.RequireConfirmedAccount = false; // Defina como true se usar confirmação de email
+    options.SignIn.RequireConfirmedEmail = false;
+    options.SignIn.RequireConfirmedPhoneNumber = false;
+
+})
+.AddEntityFrameworkStores<ApplicationDbContext>() // Configura o Identity para usar EF Core com seu DbContext
+.AddDefaultTokenProviders(); // Adiciona provedores de token para reset de senha, etc.
 
 // --- Configuração do AutoMapper --- 
 builder.Services.AddAutoMapper(typeof(MappingProfile).Assembly);
@@ -61,6 +127,63 @@ builder.Host.UseSerilog();
 
 builder.Services.AddControllers();
 
+// --- Configuração de Autenticação JWT ---
+
+var _jwtSecret = builder.Configuration["JwtSettings--Secret"];
+var _jwtIssuer = builder.Configuration["JwtSettings--Issuer"];
+var _jwtAudience = builder.Configuration["JwtSettings--Audience"];
+
+if(string.IsNullOrEmpty(_jwtIssuer) || string.IsNullOrEmpty(_jwtAudience) || string.IsNullOrEmpty(_jwtSecret))
+{
+    throw new Exception("Configuração JWT não encontrada. Verifique se as chaves JwtSettings--Issuer, JwtSettings--Audience e JwtSettings--Secret estão definidas.");
+}
+
+var key = Encoding.ASCII.GetBytes(_jwtSecret);
+
+builder.Services.AddAuthentication(options =>
+{
+    // Define o esquema de autenticação padrão como JWT Bearer
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    // options.DefaultScheme = JwtBearerDefaults.AuthenticationScheme; // Opcional: define o esquema padrão para SignIn/SignOut também
+})
+.AddJwtBearer(options =>
+{
+    // ATENÇÃO: RequireHttpsMetadata DEVE ser true em ambientes de produção!
+    // Definido como false aqui para facilitar testes locais sem HTTPS.
+    options.RequireHttpsMetadata = false;
+    // Salva o token no HttpContext para que possa ser acessado posteriormente se necessário
+    options.SaveToken = true;
+    // Parâmetros para validar o token JWT recebido
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuerSigningKey = true, // Valida a assinatura do token usando a chave secreta
+        IssuerSigningKey = new SymmetricSecurityKey(key), // A chave secreta usada para validar
+        ValidateIssuer = true, // Valida se o emissor do token é o esperado
+        ValidIssuer = _jwtIssuer, // O emissor esperado (definido em appsettings ou user-secrets)
+        ValidateAudience = true, // Valida se o público do token é o esperado
+        ValidAudience = _jwtAudience, // O público esperado (definido em appsettings ou user-secrets)
+        ValidateLifetime = true, // Valida se o token não expirou
+        ClockSkew = TimeSpan.Zero // Define a tolerância de tempo para expiração (zero é mais rigoroso)
+    };
+    // Opcional: Configurar eventos para lidar com falhas de autenticação JWT ou token validado
+    // options.Events = new JwtBearerEvents
+    // {
+    //     OnAuthenticationFailed = context => {
+    //         Log.Error(context.Exception, "Falha na autenticação JWT");
+    //         return Task.CompletedTask;
+    //     },
+    //     OnTokenValidated = context => {
+    //         Log.Information("Token JWT validado com sucesso para o usuário: {UserName}", context.Principal?.Identity?.Name);
+    //         return Task.CompletedTask;
+    //     }
+    // };
+});
+
+// --- Configuração de Autorização ---
+// Adiciona os serviços de autorização
+builder.Services.AddAuthorization();
+
 // --- Configuraçãodo Swagger ---
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
@@ -70,6 +193,33 @@ builder.Services.AddSwaggerGen(options =>
     {
         Title = "MetalFlowScheduler.Api - V1",
         Version = "v1"
+    });
+
+    // Configuração para o Swagger UI entender e permitir o envio do token JWT (Bearer)
+    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme()
+    {
+        Name = "Authorization", // Nome do cabeçalho HTTP
+        Type = SecuritySchemeType.ApiKey, // Tipo de esquema (ApiKey é usado para cabeçalhos)
+        Scheme = "Bearer", // O esquema de autenticação (Bearer)
+        BearerFormat = "JWT", // Formato do token (JWT)
+        In = ParameterLocation.Header, // Onde o token será enviado (no cabeçalho)
+        Description = "JWT Authorization header using the Bearer scheme. Enter 'Bearer ' [space] and then your token in the text input below.\r\n\r\nExample: \"Bearer 12345abcdef\"",
+    });
+
+    // Adiciona a exigência de segurança (o token Bearer) para todos os endpoints no Swagger UI
+    options.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference
+                {
+                    Type = ReferenceType.SecurityScheme,
+                    Id = "Bearer" // Deve corresponder ao nome definido em AddSecurityDefinition
+                }
+            },
+            new string[] {} // Escopos necessários (vazio para JWT simples)
+        }
     });
 
     options.DocInclusionPredicate((docName, apiDesc) =>
@@ -112,6 +262,9 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
+
+
+
 // --- Configuração do Serilog ---
 app.UseSerilogRequestLogging();
 
@@ -133,6 +286,7 @@ app.UseCors("AllowReactApp");
 
 app.UseHttpsRedirection();
 
+app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
