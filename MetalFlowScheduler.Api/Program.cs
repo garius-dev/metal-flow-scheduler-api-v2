@@ -22,6 +22,7 @@ using Gcp.SecretManager.Provider;
 using MetalFlowScheduler.Api.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Newtonsoft.Json;
 
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Debug()
@@ -39,20 +40,10 @@ var googleCloudProjectId = builder.Configuration["GoogleCloud:ProjectId"];
 
 if (!string.IsNullOrEmpty(googleCloudProjectId))
 {
-    // **VERIFIQUE SE O PACOTE NuGet Gcp.SecretManager.Provider ESTÁ INSTALADO E RESTAURADO**
-    // O método AddGcpSecretManager é um método de extensão no IConfigurationBuilder (que builder.Configuration implementa)
-    builder.Configuration.AddGcpSecretManager( // <-- Método CORRETO
+    builder.Configuration.AddGcpSecretManager(
         options =>
         {
-            options.ProjectId = googleCloudProjectId; // O ProjectId agora é configurado nas opções
-            // Opcional: Adicionar um prefixo se seus segredos no Secret Manager tiverem um (ex: "MyApiSecrets-")
-            // options.SecretPrefix = "MyApiSecrets-"; // Note: O nome da opção pode variar no pacote
-
-            // Opcional: Configurar credenciais explicitamente (geralmente não necessário com ADC)
-            // options.CredentialsPath = "/caminho/para/sua/chave-conta-servico.json";
-
-            // Opcional: Configurar outras opções específicas deste provedor
-            // Consulte a documentação do pacote Gcp.SecretManager.Provider para opções adicionais.
+            options.ProjectId = googleCloudProjectId;
         });
     Log.Information("Provedor de configuração do Google Cloud Secret Manager adicionado para o projeto: {ProjectId}", googleCloudProjectId);
 }
@@ -64,24 +55,31 @@ else
 
 // --- Configuração do bind das configs --- 
 
-var _jwtSecret = builder.Configuration["JwtSettings--Secret"];
-var _jwtIssuer = builder.Configuration["JwtSettings--Issuer"];
-var _jwtAudience = builder.Configuration["JwtSettings--Audience"];
-var _jwtExpiration = builder.Configuration["JwtSettings--ExpirationInMinutes"];
-
-if (string.IsNullOrEmpty(_jwtIssuer) || string.IsNullOrEmpty(_jwtAudience) || string.IsNullOrEmpty(_jwtSecret) || string.IsNullOrEmpty(_jwtExpiration))
-{
-    throw new Exception("Configuração JWT não encontrada. Verifique se as chaves JwtSettings--Issuer, JwtSettings--Audience, JwtSettings--ExpirationInMinutes e JwtSettings--Secret estão definidas.");
-}
-
-JwtSecrets jwtSecretBinder = new JwtSecrets(_jwtSecret, _jwtIssuer, _jwtAudience, _jwtExpiration);
+JwtSecretConfig jwtSecretBinder = JsonConvert.DeserializeObject<JwtSecretConfig>(builder.Configuration["MetalFlowScheduler-JwtSettings"] ?? string.Empty)
+    ?? throw new InvalidOperationException("Falha ao desserializar o JSON do segredo em JwtSecrets. Verifique o formato do JSON.");
 builder.Services.AddSingleton(Options.Create(jwtSecretBinder));
 
+ConnectionStringsConfig connectionStringsConfigBinder = JsonConvert.DeserializeObject<ConnectionStringsConfig>(builder.Configuration["MetalFlowScheduler-ConnectionStrings"] ?? string.Empty)
+            ?? throw new InvalidOperationException("Falha ao desserializar o JSON em ConnectionStringsConfig. Verifique o formato do JSON.");
+
+
+ConnectionStringConfig connectionString = new ConnectionStringConfig();
+if (builder.Environment.IsDevelopment())
+{
+    connectionString = connectionStringsConfigBinder.ConnectionStrings.FirstOrDefault(w => w.Environment == "dev")
+        ?? throw new InvalidOperationException("Falha ao coletar a ConnectionString do ambiente 'dev'.");
+    Log.Fatal("Falha ao coletar a ConnectionString do ambiente 'dev'.");
+}
+else
+{
+    connectionString = connectionStringsConfigBinder.ConnectionStrings.FirstOrDefault(w => w.Environment == "prod")
+        ?? throw new InvalidOperationException("Falha ao coletar a ConnectionString do ambiente 'prod'.");
+    Log.Fatal("Falha ao coletar a ConnectionString do ambiente 'prod'.");
+}
 
 // --- Configuração do PostgreSQL --- 
-var _connectionString = builder.Configuration["ConnectionStrings--PostgreDevelopConnection"];
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
-options.UseNpgsql(_connectionString,
+options.UseNpgsql(connectionString.ConnectionString,
     npgsqlOptionsAction: sqlOptions =>
     {
         sqlOptions.EnableRetryOnFailure(
