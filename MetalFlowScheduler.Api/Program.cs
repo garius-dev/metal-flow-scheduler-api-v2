@@ -54,12 +54,9 @@ else
 
 
 // --- Configuração do bind das configs --- 
-
-
 JwtSecretConfig jwtSecretBinder = JsonConvert.DeserializeObject<JwtSecretConfig>(builder.Configuration["MetalFlowScheduler-JwtSettings"] ?? string.Empty)
     ?? throw new InvalidOperationException("Falha ao desserializar o JSON do segredo em JwtSecrets. Verifique o formato do JSON.");
 builder.Services.AddSingleton(Options.Create(jwtSecretBinder));
-
 
 
 ConnectionStringsConfig connectionStringsConfigBinder = JsonConvert.DeserializeObject<ConnectionStringsConfig>(builder.Configuration["MetalFlowScheduler-ConnectionStrings"] ?? string.Empty)
@@ -71,13 +68,11 @@ if (builder.Environment.IsDevelopment())
 {
     connectionString = connectionStringsConfigBinder.ConnectionStrings.FirstOrDefault(w => w.Environment == "dev")
         ?? throw new InvalidOperationException("Falha ao coletar a ConnectionString do ambiente 'dev'.");
-    Log.Fatal("Falha ao coletar a ConnectionString do ambiente 'dev'.");
 }
 else
 {
     connectionString = connectionStringsConfigBinder.ConnectionStrings.FirstOrDefault(w => w.Environment == "prod")
         ?? throw new InvalidOperationException("Falha ao coletar a ConnectionString do ambiente 'prod'.");
-    Log.Fatal("Falha ao coletar a ConnectionString do ambiente 'prod'.");
 }
 builder.Services.AddSingleton(Options.Create(connectionString));
 
