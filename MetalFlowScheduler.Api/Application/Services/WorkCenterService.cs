@@ -3,18 +3,18 @@ using MetalFlowScheduler.Api.Application.Dtos;
 using MetalFlowScheduler.Api.Application.Interfaces;
 using MetalFlowScheduler.Api.Domain.Entities;
 using MetalFlowScheduler.Api.Domain.Interfaces;
-// using MetalFlowScheduler.Api.Application.Exceptions; // Para exceções customizadas (opcional)
+using MetalFlowScheduler.Api.Application.Exceptions; // Using custom exceptions
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
-using Microsoft.EntityFrameworkCore; // Para DbUpdateException
+using Microsoft.EntityFrameworkCore; // For DbUpdateException, if specific handling is needed
 
 namespace MetalFlowScheduler.Api.Application.Services
 {
     /// <summary>
-    /// Serviço para gerenciar operações relacionadas à entidade WorkCenter.
+    /// Service for managing operations related to the WorkCenter entity.
     /// </summary>
     public class WorkCenterService : IWorkCenterService
     {
@@ -41,20 +41,19 @@ namespace MetalFlowScheduler.Api.Application.Services
         /// <inheritdoc/>
         public async Task<IEnumerable<WorkCenterDto>> GetAllEnabledAsync()
         {
-            // Usa método do repositório que inclui detalhes da linha para o DTO
             var workCenters = await _workCenterRepository.GetAllEnabledWithDetailsAsync();
             return _mapper.Map<IEnumerable<WorkCenterDto>>(workCenters);
         }
 
         /// <inheritdoc/>
-        public async Task<WorkCenterDto?> GetByIdAsync(int id)
+        public async Task<WorkCenterDto> GetByIdAsync(int id)
         {
-            // Usa método do repositório que inclui detalhes
             var workCenter = await _workCenterRepository.GetByIdWithDetailsAsync(id);
 
             if (workCenter == null || !workCenter.Enabled)
             {
-                return null;
+                _logger.LogWarning("WorkCenter with ID {WorkCenterId} not found or not enabled.", id);
+                throw new NotFoundException(nameof(WorkCenter), id);
             }
             return _mapper.Map<WorkCenterDto>(workCenter);
         }
@@ -65,14 +64,14 @@ namespace MetalFlowScheduler.Api.Application.Services
             await ValidateLineAsync(createDto.LineId);
             await ValidateOperationTypesAsync(createDto.OperationTypeIds);
 
-            // C11: Verificar nome existente (assumindo unicidade global)
             var existingWorkCenters = await _workCenterRepository.FindAsync(wc => wc.Name.ToLower() == createDto.Name.ToLower());
             var existingActive = existingWorkCenters.FirstOrDefault(wc => wc.Enabled);
             var existingInactive = existingWorkCenters.FirstOrDefault(wc => !wc.Enabled);
 
             if (existingActive != null)
             {
-                throw new Exception($"Já existe um Centro de Trabalho ativo com o nome '{createDto.Name}'."); // TODO: Use ValidationException
+                _logger.LogWarning("Attempted to create WorkCenter with duplicate active name: {WorkCenterName}", createDto.Name);
+                throw new ConflictException($"A WorkCenter with the name '{createDto.Name}' already exists and is active.");
             }
 
             WorkCenter workCenterToProcess;
@@ -80,13 +79,12 @@ namespace MetalFlowScheduler.Api.Application.Services
 
             if (existingInactive != null)
             {
-                // C11: Reativar e atualizar
+                _logger.LogInformation("Reactivating and updating inactive WorkCenter with name: {WorkCenterName}, ID: {WorkCenterId}", createDto.Name, existingInactive.ID);
                 workCenterToProcess = existingInactive;
                 var existingDetails = await _workCenterRepository.GetByIdWithDetailsAsync(workCenterToProcess.ID);
                 if (existingDetails?.OperationRoutes != null)
                 {
-                    // Limpa rotas existentes ao reativar (regra assumida)
-                    workCenterToProcess.OperationRoutes.Clear();
+                    workCenterToProcess.OperationRoutes.Clear(); // Clear existing routes on reactivation
                 }
                 _mapper.Map(createDto, workCenterToProcess);
                 workCenterToProcess.Enabled = true;
@@ -94,56 +92,52 @@ namespace MetalFlowScheduler.Api.Application.Services
             }
             else
             {
-                // Criar novo
                 workCenterToProcess = _mapper.Map<WorkCenter>(createDto);
             }
 
-            // C07: Adicionar WorkCenterOperationRoute
-            int order = 1;
-            foreach (var opTypeId in createDto.OperationTypeIds.Distinct())
+            ManageOperationRoutes(workCenterToProcess, createDto.OperationTypeIds, true);
+
+
+            try
             {
-                // Usando valores padrão para Version, TransportTime, etc. Ajustar se DTO for mais complexo.
-                var newRoute = new WorkCenterOperationRoute
+                if (isReactivating)
                 {
-                    OperationTypeID = opTypeId,
-                    Order = order++,
-                    Version = 1,
-                    TransportTimeInMinutes = 0, // Padrão - AJUSTAR
-                    EffectiveStartDate = DateTime.UtcNow,
-                    EffectiveEndDate = null,
-                };
-                workCenterToProcess.OperationRoutes.Add(newRoute);
+                    await _workCenterRepository.UpdateAsync(workCenterToProcess);
+                }
+                else
+                {
+                    await _workCenterRepository.AddAsync(workCenterToProcess);
+                }
+            }
+            catch (DbUpdateException ex)
+            {
+                _logger.LogError(ex, "Database error while creating/reactivating WorkCenter: {WorkCenterName}", createDto.Name);
+                throw new Exception("A database error occurred while saving the work center.", ex);
             }
 
-            if (isReactivating)
-            {
-                await _workCenterRepository.UpdateAsync(workCenterToProcess);
-            }
-            else
-            {
-                await _workCenterRepository.AddAsync(workCenterToProcess);
-            }
-
-            return await GetByIdAsync(workCenterToProcess.ID) ??
-                   throw new Exception("Falha ao buscar o centro de trabalho recém-criado/atualizado.");
+            return await GetByIdAsync(workCenterToProcess.ID);
         }
 
         /// <inheritdoc/>
-        public async Task<WorkCenterDto?> UpdateAsync(int id, UpdateWorkCenterDto updateDto)
+        public async Task<WorkCenterDto> UpdateAsync(int id, UpdateWorkCenterDto updateDto)
         {
-            var workCenter = await _workCenterRepository.GetByIdWithDetailsAsync(id); // Carrega rotas existentes para C09
+            var workCenter = await _workCenterRepository.GetByIdWithDetailsAsync(id);
 
-            if (workCenter == null) return null;
+            if (workCenter == null)
+            {
+                _logger.LogWarning("WorkCenter with ID {WorkCenterId} not found for update.", id);
+                throw new NotFoundException(nameof(WorkCenter), id);
+            }
 
             if (!workCenter.Enabled)
             {
-                throw new Exception($"Não é possível atualizar um Centro de Trabalho inativo (ID: {id})."); // TODO: Use ValidationException
+                _logger.LogWarning("Attempted to update inactive WorkCenter with ID {WorkCenterId}.", id);
+                throw new ConflictException($"Cannot update an inactive WorkCenter (ID: {id}). Consider reactivating it first.");
             }
 
             await ValidateLineAsync(updateDto.LineId);
             await ValidateOperationTypesAsync(updateDto.OperationTypeIds);
 
-            // Verificar conflito de nome
             if (!string.Equals(workCenter.Name, updateDto.Name, StringComparison.OrdinalIgnoreCase))
             {
                 var conflictingWorkCenter = (await _workCenterRepository.FindAsync(wc =>
@@ -151,106 +145,160 @@ namespace MetalFlowScheduler.Api.Application.Services
                     .FirstOrDefault();
                 if (conflictingWorkCenter != null)
                 {
-                    throw new Exception($"Já existe outro Centro de Trabalho ativo com o nome '{updateDto.Name}'."); // TODO: Use ValidationException
+                    _logger.LogWarning("WorkCenter update for ID {WorkCenterId} resulted in a name conflict with WorkCenter ID {ConflictingWorkCenterId} for name {WorkCenterName}", id, conflictingWorkCenter.ID, updateDto.Name);
+                    throw new ConflictException($"Another active WorkCenter with the name '{updateDto.Name}' already exists.");
                 }
             }
 
-            _mapper.Map(updateDto, workCenter); // Mapeia DTO -> Entidade
-
-            // C09: Gerenciamento inteligente das rotas
-            ManageOperationRoutes(workCenter, updateDto.OperationTypeIds);
+            _mapper.Map(updateDto, workCenter);
+            ManageOperationRoutes(workCenter, updateDto.OperationTypeIds, false);
 
             try
             {
                 await _workCenterRepository.UpdateAsync(workCenter);
-                return await GetByIdAsync(workCenter.ID);
             }
             catch (DbUpdateException ex)
             {
-                _logger.LogError(ex, "Erro ao atualizar centro de trabalho ID {WorkCenterId} no banco de dados.", id);
-                throw; // Re-lança para tratamento global
+                _logger.LogError(ex, "Database error while updating WorkCenter ID {WorkCenterId}.", id);
+                throw new Exception("A database error occurred while updating the work center.", ex);
             }
+
+            return await GetByIdAsync(workCenter.ID);
         }
 
         /// <inheritdoc/>
         public async Task<bool> DeleteAsync(int id)
         {
             var workCenter = await _workCenterRepository.GetByIdAsync(id);
-            if (workCenter == null) return false;
-            if (!workCenter.Enabled) return true; // Já inativo
+            if (workCenter == null)
+            {
+                _logger.LogWarning("WorkCenter with ID {WorkCenterId} not found for deletion.", id);
+                throw new NotFoundException(nameof(WorkCenter), id, "WorkCenter not found for deletion.");
+            }
 
-            // TODO: Adicionar validações de negócio antes de deletar
+            if (!workCenter.Enabled)
+            {
+                _logger.LogInformation("WorkCenter with ID {WorkCenterId} is already inactive.", id);
+                return true;
+            }
+
+            // TODO: Add business logic validation before deletion (e.g., check for active operations or production orders)
+            // if (await _operationRepository.AnyActiveOperationsForWorkCenterAsync(id))
+            // {
+            //    _logger.LogWarning("Attempted to delete WorkCenter ID {WorkCenterId} with active operations.", id);
+            //    throw new ConflictException($"WorkCenter ID {id} cannot be disabled as it has active operations.");
+            // }
 
             try
             {
-                await _workCenterRepository.SoftRemoveAsync(workCenter); // Soft delete
+                await _workCenterRepository.SoftRemoveAsync(workCenter);
+                _logger.LogInformation("WorkCenter with ID {WorkCenterId} was successfully disabled.", id);
                 return true;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Erro ao desabilitar centro de trabalho ID {WorkCenterId}", id);
-                return false;
+                _logger.LogError(ex, "Error disabling WorkCenter ID {WorkCenterId}", id);
+                throw new Exception($"An error occurred while disabling WorkCenter ID {id}.", ex);
             }
         }
 
-        // --- Métodos Auxiliares ---
-
         /// <summary>
-        /// Valida se a Linha existe e está ativa.
+        /// Validates if the Line exists and is active.
+        /// Throws ValidationException if invalid.
         /// </summary>
         private async Task ValidateLineAsync(int lineId)
         {
             var line = await _lineRepository.GetByIdAsync(lineId);
             if (line == null || !line.Enabled)
             {
-                throw new Exception($"Linha com ID {lineId} inválida ou inativa."); // TODO: Use ValidationException
+                _logger.LogWarning("Validation failed for LineId {LineId}: Not found or inactive.", lineId);
+                throw new ValidationException(new Dictionary<string, string[]> { { "LineId", new[] { $"Line with ID {lineId} is invalid or inactive." } } });
             }
         }
 
         /// <summary>
-        /// Valida se todos os OperationType IDs existem e estão ativos.
+        /// Validates if all OperationType IDs exist and are active.
+        /// Throws ValidationException if any are invalid.
         /// </summary>
-        private async Task<List<OperationType>> ValidateOperationTypesAsync(List<int> operationTypeIds)
+        private async Task ValidateOperationTypesAsync(List<int> operationTypeIds)
         {
             if (operationTypeIds == null || !operationTypeIds.Any())
             {
-                throw new Exception("A lista de IDs de Tipo de Operação não pode ser vazia."); // TODO: Use ValidationException
+                _logger.LogWarning("Validation failed: OperationTypeIds list cannot be null or empty.");
+                throw new ValidationException(new Dictionary<string, string[]> { { "OperationTypeIds", new[] { "At least one OperationType ID must be provided." } } });
             }
+
             var uniqueIds = operationTypeIds.Distinct().ToList();
-            var operationTypes = await _operationTypeRepository.FindAsync(ot => uniqueIds.Contains(ot.ID) && ot.Enabled);
-            if (operationTypes.Count() != uniqueIds.Count)
+            var operationTypes = await _operationTypeRepository.FindAsync(ot => uniqueIds.Contains(ot.ID));
+
+            var foundAndEnabledTypes = operationTypes.Where(ot => ot.Enabled).ToList();
+
+            if (foundAndEnabledTypes.Count() != uniqueIds.Count)
             {
-                var missingIds = uniqueIds.Except(operationTypes.Select(ot => ot.ID));
-                throw new Exception($"Um ou mais IDs de Tipo de Operação são inválidos ou inativos: {string.Join(", ", missingIds)}"); // TODO: Use ValidationException
+                var allFoundIds = operationTypes.Select(ot => ot.ID).ToList();
+                var completelyMissingIds = uniqueIds.Except(allFoundIds).ToList();
+                var foundButDisabledIds = allFoundIds.Except(foundAndEnabledTypes.Select(ot => ot.ID)).ToList();
+
+                var errorMessages = new List<string>();
+                if (completelyMissingIds.Any())
+                {
+                    errorMessages.Add($"OperationType IDs not found: {string.Join(", ", completelyMissingIds)}.");
+                }
+                if (foundButDisabledIds.Any())
+                {
+                    errorMessages.Add($"OperationType IDs are inactive: {string.Join(", ", foundButDisabledIds)}.");
+                }
+                _logger.LogWarning("Validation failed for OperationTypeIds: {ValidationErrors}", string.Join(" ", errorMessages));
+                throw new ValidationException(new Dictionary<string, string[]> { { "OperationTypeIds", errorMessages.ToArray() } });
             }
-            return operationTypes.ToList();
         }
 
         /// <summary>
-        /// Gerencia a coleção de WorkCenterOperationRoutes com base nos IDs fornecidos no DTO (C09).
+        /// Manages the collection of WorkCenterOperationRoutes based on the IDs provided in the DTO.
         /// </summary>
-        private void ManageOperationRoutes(WorkCenter workCenter, List<int> operationTypeIdsFromDto)
+        /// <param name="workCenter">The work center entity.</param>
+        /// <param name="operationTypeIdsFromDto">The list of operation type IDs from the DTO.</param>
+        /// <param name="isCreating">Flag to indicate if this is a create operation, affecting versioning logic.</param>
+        private void ManageOperationRoutes(WorkCenter workCenter, List<int> operationTypeIdsFromDto, bool isCreating)
         {
             workCenter.OperationRoutes ??= new List<WorkCenterOperationRoute>();
-            var existingRouteOpTypeIds = workCenter.OperationRoutes.Select(r => r.OperationTypeID).ToList();
             var dtoOpTypeIds = operationTypeIdsFromDto.Distinct().ToList();
 
-            // Rotas para remover
-            var routesToRemove = workCenter.OperationRoutes.Where(r => !dtoOpTypeIds.Contains(r.OperationTypeID)).ToList();
-            foreach (var route in routesToRemove) workCenter.OperationRoutes.Remove(route);
-
-            // IDs de Tipos de Operação para adicionar
-            var opTypeIdsToAdd = dtoOpTypeIds.Except(existingRouteOpTypeIds).ToList();
-            int currentMaxOrder = workCenter.OperationRoutes.Any() ? workCenter.OperationRoutes.Max(r => r.Order) : 0;
-            foreach (var opTypeId in opTypeIdsToAdd)
+            if (!isCreating) // For updates, remove routes not in DTO
             {
-                // Usando valores padrão para Version, TransportTime, etc. Ajustar se DTO for mais complexo.
+                var routesToRemove = workCenter.OperationRoutes
+                                               .Where(r => !dtoOpTypeIds.Contains(r.OperationTypeID))
+                                               .ToList();
+                foreach (var route in routesToRemove)
+                {
+                    workCenter.OperationRoutes.Remove(route);
+                }
+            }
+
+            // Add new routes or update existing ones (if versioning/details were more complex)
+            // For simplicity here, we add if not present, assuming DTO provides the full desired state.
+            // More complex logic would handle updates to existing route entries if DTOs carried more route-specific data.
+
+            int currentOrder = 0; // Reset order for the new set of routes
+            var existingRoutesToKeep = workCenter.OperationRoutes
+                                        .Where(r => dtoOpTypeIds.Contains(r.OperationTypeID))
+                                        .OrderBy(r => r.Order) // Maintain existing order for kept items if possible
+                                        .ToList();
+
+            // Clear and re-add to ensure correct ordering and handle new/removed items cleanly
+            workCenter.OperationRoutes.Clear();
+
+            foreach (var opTypeId in dtoOpTypeIds)
+            {
+                // For simplicity, we're creating new route objects.
+                // A more sophisticated update might try to find and modify existing route objects
+                // if they had more properties to update beyond just OperationTypeID and Order.
                 var newRoute = new WorkCenterOperationRoute
                 {
                     OperationTypeID = opTypeId,
-                    Order = ++currentMaxOrder,
-                    Version = 1,
-                    TransportTimeInMinutes = 0, // Padrão - AJUSTAR
+                    Order = ++currentOrder,
+                    Version = 1, // Default version, could be incremented based on more complex rules
+                    TransportTimeInMinutes = 0, // Default, should come from DTO if configurable per route
                     EffectiveStartDate = DateTime.UtcNow,
                     EffectiveEndDate = null
                 };

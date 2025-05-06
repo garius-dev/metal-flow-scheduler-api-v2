@@ -4,7 +4,6 @@ using MetalFlowScheduler.Api.Application.Dtos;
 using MetalFlowScheduler.Api.Application.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
-using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
@@ -23,8 +22,8 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
 
         public OperationTypesController(IOperationTypeService operationTypeService, ILogger<OperationTypesController> logger)
         {
-            _operationTypeService = operationTypeService ?? throw new ArgumentNullException(nameof(operationTypeService));
-            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _operationTypeService = operationTypeService;
+            _logger = logger;
         }
 
         /// <summary>
@@ -56,6 +55,7 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
         [ProducesResponseType(500)]
         public async Task<ActionResult<OperationTypeDto>> GetById(int id)
         {
+            // Service will throw NotFoundException if not found/inactive, middleware handles 404.
             var operationType = await _operationTypeService.GetByIdAsync(id);
             return Ok(operationType);
         }
@@ -81,6 +81,7 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
                 return BadRequest(ModelState);
             }
 
+            // Service will throw ConflictException if name exists, middleware handles 409.
             var createdOperationType = await _operationTypeService.CreateAsync(createDto);
 
             return CreatedAtAction(nameof(GetById), new { id = createdOperationType.Id, version = "1.0" }, createdOperationType);
@@ -89,14 +90,14 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
         /// <summary>
         /// Atualiza um tipo de operação existente.
         /// </summary>
-        /// <param name="id">O ID do tipo de operação a ser atualizado.</param>
+        /// <param name="id">O ID do tipo de operação a ser atualizada.</param>
         /// <param name="updateDto">Os novos dados para o tipo de operação.</param>
-        /// <returns>O tipo de operação atualizado.</returns>
-        /// <response code="200">Retorna o tipo de operação atualizado.</response>
-        /// <response code="400">Se os dados fornecidos forem inválidos (validação do DTO ou tratado pelo middleware).</response>
-        /// <response code="404">Se o tipo de operação não for encontrado (tratado pelo middleware via NotFoundException).</response>
-        /// <response code="409">Se houver conflito (ex: nome duplicado ou item inativo) (tratado pelo middleware via ConflictException).</response>
-        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente pelo middleware).</response>
+        /// <returns>O objeto atualizado.</returns>
+        /// <response code="200">Retorna a operação atualizada.</response>
+        /// <response code="400">If the provided data is invalid.</response>
+        /// <response code="404">If the operation type is not found (handled by middleware via NotFoundException).</response>
+        /// <response code="409">If there is a conflict (e.g., duplicate name or inactive item) (handled by middleware via ConflictException).</response>
+        /// <response code="500">If an unexpected server error occurs (handled globally by middleware).</response>
         [HttpPut("{id}")]
         [ProducesResponseType(typeof(OperationTypeDto), 200)]
         [ProducesResponseType(400)]
@@ -110,6 +111,7 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
                 return BadRequest(ModelState);
             }
 
+            // Service will throw NotFoundException or ConflictException, middleware handles them.
             var updatedOperationType = await _operationTypeService.UpdateAsync(id, updateDto);
 
             return Ok(updatedOperationType);
@@ -131,9 +133,11 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
         [ProducesResponseType(500)]
         public async Task<IActionResult> Delete(int id)
         {
+            // Service will throw NotFoundException or ConflictException, middleware handles them.
             var success = await _operationTypeService.DeleteAsync(id);
 
-            return NoContent(); // Retorna 204 se o serviço indicar sucesso (inclusive se já estava inativo)
+            // NoContent is returned if the service indicates success (including if already inactive)
+            return NoContent();
         }
     }
 }

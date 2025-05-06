@@ -1,26 +1,32 @@
 ﻿using Asp.Versioning;
 using MetalFlowScheduler.Api.Application.Dtos;
 using MetalFlowScheduler.Api.Application.Interfaces;
-// TODO: using MetalFlowScheduler.Api.Application.Exceptions; // Para exceções customizadas - Serão lançadas pelo serviço
+using MetalFlowScheduler.Api.Application.Exceptions; // For explicit documentation of exceptions
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
-using System;
+using System; // For ArgumentNullException
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
 {
     /// <summary>
-    /// Controlador para gerenciar Centros de Trabalho (WorkCenters).
+    /// Controller for managing WorkCenters.
     /// </summary>
-    [ApiVersion("1.0")] // RG07: Versionamento
+    [ApiVersion("1.0")]
     [Route("api/v{version:apiVersion}/[controller]")]
     [ApiController]
+    // [Authorize(Roles = "Administrator,Planner")] // Example authorization
     public class WorkCentersController : ControllerBase
     {
         private readonly IWorkCenterService _workCenterService;
         private readonly ILogger<WorkCentersController> _logger;
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="WorkCentersController"/> class.
+        /// </summary>
+        /// <param name="workCenterService">The work center service.</param>
+        /// <param name="logger">The logger.</param>
         public WorkCentersController(IWorkCenterService workCenterService, ILogger<WorkCentersController> logger)
         {
             _workCenterService = workCenterService ?? throw new ArgumentNullException(nameof(workCenterService));
@@ -28,153 +34,116 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
         }
 
         /// <summary>
-        /// Obtém todos os centros de trabalho ativos.
+        /// Gets all enabled work centers.
         /// </summary>
-        /// <returns>Uma lista de centros de trabalho.</returns>
-        /// <response code="200">Retorna a lista de centros de trabalho ativos.</response>
-        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
+        /// <returns>A list of enabled work centers.</returns>
+        /// <response code="200">Returns the list of enabled work centers.</response>
+        /// <response code="500">If an unexpected error occurs.</response>
         [HttpGet]
         [ProducesResponseType(typeof(IEnumerable<WorkCenterDto>), 200)]
-        [ProducesResponseType(500)] // Mantido para indicar que 500 é possível, mas tratado globalmente
-        public async Task<ActionResult<IEnumerable<WorkCenterDto>>> GetAll()
+        public async Task<IActionResult> GetAllEnabled()
         {
-            // Removido try-catch genérico. Exceções serão tratadas por middleware global.
+            _logger.LogInformation("Attempting to get all enabled work centers.");
             var workCenters = await _workCenterService.GetAllEnabledAsync();
+            _logger.LogInformation("Successfully retrieved all enabled work centers.");
             return Ok(workCenters);
         }
 
         /// <summary>
-        /// Obtém um centro de trabalho específico pelo seu ID.
+        /// Gets a specific work center by its ID.
         /// </summary>
-        /// <param name="id">O ID do centro de trabalho.</param>
-        /// <returns>O centro de trabalho encontrado.</returns>
-        /// <response code="200">Retorna o centro de trabalho encontrado.</response>
-        /// <response code="404">Se o centro de trabalho não for encontrado ou estiver inativo (tratado pelo serviço/middleware).</response>
-        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
+        /// <param name="id">The ID of the work center.</param>
+        /// <returns>The work center if found.</returns>
+        /// <response code="200">Returns the requested work center.</response>
+        /// <response code="404">If the work center is not found or not enabled.</response>
+        /// <response code="500">If an unexpected error occurs.</response>
         [HttpGet("{id}")]
         [ProducesResponseType(typeof(WorkCenterDto), 200)]
         [ProducesResponseType(404)]
-        [ProducesResponseType(500)] // Mantido para indicar que 500 é possível, mas tratado globalmente
-        public async Task<ActionResult<WorkCenterDto>> GetById(int id)
+        public async Task<IActionResult> GetById(int id)
         {
-            // Removido try-catch genérico. NotFound será retornado se o serviço retornar null
-            // ou se uma exceção de "não encontrado" for lançada pelo serviço e tratada globalmente.
+            _logger.LogInformation("Attempting to get work center with ID: {WorkCenterId}", id);
             var workCenter = await _workCenterService.GetByIdAsync(id);
-
-            if (workCenter == null)
-            {
-                // O serviço GetByIdAsync já retorna null se não encontrar ou estiver inativo.
-                // Se você implementar exceções customizadas no serviço (ex: NotFoundException),
-                // este 'if' pode ser removido e o middleware global cuidaria do 404.
-                _logger.LogWarning("Centro de trabalho com ID {Id} não encontrado (ou inativo).", id);
-                return NotFound($"Centro de Trabalho com ID {id} não encontrado.");
-            }
-
+            // NotFoundException will be handled by middleware
+            _logger.LogInformation("Successfully retrieved work center with ID: {WorkCenterId}", id);
             return Ok(workCenter);
         }
 
         /// <summary>
-        /// Cria um novo centro de trabalho, incluindo a definição de suas rotas de operação.
+        /// Creates a new work center.
         /// </summary>
-        /// <param name="createDto">Os dados para criar o novo centro de trabalho.</param>
-        /// <returns>O centro de trabalho criado.</returns>
-        /// <response code="201">Retorna o centro de trabalho recém-criado.</response>
-        /// <response code="400">Se os dados fornecidos forem inválidos (validação do DTO ou do serviço/middleware).</response>
-        /// <response code="409">Se houver conflito (ex: nome duplicado) (tratado pelo serviço/middleware).</response>
-        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
+        /// <param name="createDto">The work center creation data.</param>
+        /// <returns>The created work center.</returns>
+        /// <response code="201">Returns the newly created work center.</response>
+        /// <response code="400">If the input data is invalid (DTO validation or business rule violation).</response>
+        /// <response code="409">If a work center with the same name already exists and is active, or if related entities are invalid.</response>
+        /// <response code="500">If an unexpected error occurs.</response>
         [HttpPost]
         [ProducesResponseType(typeof(WorkCenterDto), 201)]
-        [ProducesResponseType(400)]
-        [ProducesResponseType(409)] // Adicionado para indicar possível conflito (nome duplicado)
-        [ProducesResponseType(500)] // Mantido para indicar que 500 é possível, mas tratado globalmente
-        public async Task<ActionResult<WorkCenterDto>> Create([FromBody] CreateWorkCenterDto createDto)
+        [ProducesResponseType(400)] // From ValidationException or ModelState
+        [ProducesResponseType(409)] // From ConflictException
+        public async Task<IActionResult> Create([FromBody] CreateWorkCenterDto createDto)
         {
-            // Mantém a validação inicial do ModelState
             if (!ModelState.IsValid)
             {
+                _logger.LogWarning("Create work center request failed due to invalid model state.");
                 return BadRequest(ModelState);
             }
 
-            // Removido try-catch genérico e tratamento específico de exceções de validação/negócio.
-            // Exceções lançadas pelo serviço (validação de IDs, nome duplicado, etc.)
-            // serão tratadas por middleware global, retornando 400 ou 409.
+            _logger.LogInformation("Attempting to create a new work center with name: {WorkCenterName}", createDto.Name);
             var createdWorkCenter = await _workCenterService.CreateAsync(createDto);
-
-            // Retorna 201 Created com a localização e o objeto criado
+            _logger.LogInformation("Successfully created work center with ID: {WorkCenterId} and name: {WorkCenterName}", createdWorkCenter.Id, createdWorkCenter.Name);
             return CreatedAtAction(nameof(GetById), new { id = createdWorkCenter.Id, version = "1.0" }, createdWorkCenter);
         }
 
         /// <summary>
-        /// Atualiza um centro de trabalho existente, gerenciando suas rotas de operação.
+        /// Updates an existing work center.
         /// </summary>
-        /// <param name="id">O ID do centro de trabalho a ser atualizado.</param>
-        /// <param name="updateDto">Os novos dados para o centro de trabalho.</param>
-        /// <returns>O centro de trabalho atualizado.</returns>
-        /// <response code="200">Retorna o centro de trabalho atualizado.</response>
-        /// <response code="400">Se os dados fornecidos forem inválidos (validação do DTO ou do serviço/middleware).</response>
-        /// <response code="404">Se o centro de trabalho não for encontrado (tratado pelo serviço/middleware).</response>
-        /// <response code="409">Se houver conflito (ex: nome duplicado) (tratado pelo serviço/middleware).</response>
-        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
+        /// <param name="id">The ID of the work center to update.</param>
+        /// <param name="updateDto">The work center update data.</param>
+        /// <returns>The updated work center.</returns>
+        /// <response code="200">Returns the updated work center.</response>
+        /// <response code="400">If the input data is invalid (DTO validation or business rule violation).</response>
+        /// <response code="404">If the work center to update is not found.</response>
+        /// <response code="409">If the update causes a name conflict with another active work center, if the work center is inactive, or if related entities are invalid.</response>
+        /// <response code="500">If an unexpected error occurs.</response>
         [HttpPut("{id}")]
         [ProducesResponseType(typeof(WorkCenterDto), 200)]
-        [ProducesResponseType(400)]
-        [ProducesResponseType(404)]
-        [ProducesResponseType(409)] // Adicionado para indicar possível conflito (nome duplicado)
-        [ProducesResponseType(500)] // Mantido para indicar que 500 é possível, mas tratado globalmente
-        public async Task<ActionResult<WorkCenterDto>> Update(int id, [FromBody] UpdateWorkCenterDto updateDto)
+        [ProducesResponseType(400)] // From ValidationException or ModelState
+        [ProducesResponseType(404)] // From NotFoundException
+        [ProducesResponseType(409)] // From ConflictException
+        public async Task<IActionResult> Update(int id, [FromBody] UpdateWorkCenterDto updateDto)
         {
-            // Mantém a validação inicial do ModelState
             if (!ModelState.IsValid)
             {
+                _logger.LogWarning("Update work center request for ID {WorkCenterId} failed due to invalid model state.", id);
                 return BadRequest(ModelState);
             }
 
-            // Removido try-catch genérico e tratamento específico de exceções de validação/negócio.
-            // Exceções lançadas pelo serviço (validação de IDs, nome duplicado, item inativo, etc.)
-            // serão tratadas por middleware global, retornando 400 ou 409.
-            // O serviço UpdateAsync retornará null se não encontrar a entidade.
+            _logger.LogInformation("Attempting to update work center with ID: {WorkCenterId}", id);
             var updatedWorkCenter = await _workCenterService.UpdateAsync(id, updateDto);
-
-            if (updatedWorkCenter == null)
-            {
-                // O serviço UpdateAsync já retorna null se não encontrar.
-                // Se você implementar exceções customizadas no serviço (ex: NotFoundException),
-                // este 'if' pode ser removido e o middleware global cuidaria do 404.
-                _logger.LogWarning("Centro de trabalho com ID {Id} não encontrado para atualização.", id);
-                return NotFound($"Centro de Trabalho com ID {id} não encontrado.");
-            }
-
+            _logger.LogInformation("Successfully updated work center with ID: {WorkCenterId}", id);
             return Ok(updatedWorkCenter);
         }
 
         /// <summary>
-        /// Desabilita (soft delete) um centro de trabalho.
+        /// Disables (soft deletes) a work center.
         /// </summary>
-        /// <param name="id">O ID do centro de trabalho a ser desabilitado.</param>
-        /// <returns>Nenhum conteúdo.</returns>
-        /// <response code="204">Centro de trabalho desabilitado com sucesso.</response>
-        /// <response code="404">Se o centro de trabalho não for encontrado (tratado pelo serviço/middleware).</response>
-        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
+        /// <param name="id">The ID of the work center to disable.</param>
+        /// <returns>No content if successful.</returns>
+        /// <response code="204">Work center disabled successfully.</response>
+        /// <response code="404">If the work center to disable is not found.</response>
+        /// <response code="409">If the work center cannot be disabled due to business rule violations (e.g., active dependencies).</response>
+        /// <response code="500">If an unexpected error occurs.</response>
         [HttpDelete("{id}")]
         [ProducesResponseType(204)]
-        [ProducesResponseType(404)]
-        [ProducesResponseType(500)] // Mantido para indicar que 500 é possível, mas tratado globalmente
+        [ProducesResponseType(404)] // From NotFoundException
+        [ProducesResponseType(409)] // From ConflictException
         public async Task<IActionResult> Delete(int id)
         {
-            // Removido try-catch genérico. Exceções lançadas pelo serviço
-            // serão tratadas por middleware global.
-            // O serviço DeleteAsync retornará false se não encontrar a entidade.
-            var success = await _workCenterService.DeleteAsync(id);
-
-            if (!success)
-            {
-                // O serviço DeleteAsync já retorna false se não encontrar.
-                // Se você implementar exceções customizadas no serviço (ex: NotFoundException),
-                // este 'if' pode ser removido e o middleware global cuidaria do 404.
-                _logger.LogWarning("Centro de trabalho com ID {Id} não encontrado para exclusão ou falha ao excluir.", id);
-                return NotFound($"Centro de Trabalho com ID {id} não encontrado.");
-            }
-
+            _logger.LogInformation("Attempting to disable work center with ID: {WorkCenterId}", id);
+            await _workCenterService.DeleteAsync(id);
+            _logger.LogInformation("Successfully disabled work center with ID: {WorkCenterId}", id);
             return NoContent();
         }
     }

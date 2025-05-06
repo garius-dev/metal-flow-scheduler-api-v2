@@ -2,14 +2,10 @@
 using Asp.Versioning;
 using MetalFlowScheduler.Api.Application.Dtos;
 using MetalFlowScheduler.Api.Application.Interfaces;
-// TODO: using MetalFlowScheduler.Api.Application.Exceptions; // Não precisa mais importar aqui, middleware trata
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
-using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-// Pode ser útil para lançar BadRequest(ModelState) como ValidationException, mas não é estritamente necessário para este refactoring.
-// using MetalFlowScheduler.Api.Application.Exceptions;
 
 namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
 {
@@ -26,8 +22,8 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
 
         public OperationsController(IOperationService operationService, ILogger<OperationsController> logger)
         {
-            _operationService = operationService ?? throw new ArgumentNullException(nameof(operationService));
-            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _operationService = operationService;
+            _logger = logger;
         }
 
         /// <summary>
@@ -38,10 +34,9 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
         /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente pelo middleware).</response>
         [HttpGet]
         [ProducesResponseType(typeof(IEnumerable<OperationDto>), 200)]
-        [ProducesResponseType(500)] // Mantido para documentação
+        [ProducesResponseType(500)]
         public async Task<ActionResult<IEnumerable<OperationDto>>> GetAll()
         {
-            // Não precisa de try-catch. Exceções do serviço (incluindo 500) serão tratadas pelo middleware.
             var operations = await _operationService.GetAllEnabledAsync();
             return Ok(operations);
         }
@@ -56,13 +51,11 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
         /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente pelo middleware).</response>
         [HttpGet("{id}")]
         [ProducesResponseType(typeof(OperationDto), 200)]
-        [ProducesResponseType(404)] // Documenta a resposta 404 esperada
-        [ProducesResponseType(500)] // Mantido para documentação
+        [ProducesResponseType(404)]
+        [ProducesResponseType(500)]
         public async Task<ActionResult<OperationDto>> GetById(int id)
         {
-            // Não precisa de try-catch ou if (operation == null).
-            // O serviço lançará NotFoundException se não encontrar ou estiver inativa,
-            // e o middleware converterá para 404.
+            // Service will throw NotFoundException if not found/inactive, middleware handles 404.
             var operation = await _operationService.GetByIdAsync(id);
             return Ok(operation);
         }
@@ -79,24 +72,16 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
         [HttpPost]
         [ProducesResponseType(typeof(OperationDto), 201)]
         [ProducesResponseType(400)]
-        [ProducesResponseType(409)] // Documenta a resposta 409 esperada
-        [ProducesResponseType(500)] // Mantido para documentação
+        [ProducesResponseType(409)]
+        [ProducesResponseType(500)]
         public async Task<ActionResult<OperationDto>> Create([FromBody] CreateOperationDto createDto)
         {
-            // Mantém a validação inicial do ModelState.
-            // Opcional: pode-se converter ModelState.IsValid em uma ValidationException aqui.
             if (!ModelState.IsValid)
             {
-                return BadRequest(ModelState); // Retorna 400 com detalhes do ModelState
-                // Ou, para consistência com o middleware:
-                // throw new ValidationException(ModelState.Where(m => m.Value.Errors.Any()).ToDictionary(
-                //     kvp => kvp.Key,
-                //     kvp => kvp.Value.Errors.Select(e => e.ErrorMessage).ToArray()
-                // ));
+                return BadRequest(ModelState);
             }
 
-            // Não precisa de try-catch. Exceções do serviço (ValidationException, ConflictException, etc.)
-            // serão tratadas pelo middleware.
+            // Service will throw exceptions (Validation, Conflict, etc.), middleware handles them.
             var createdOperation = await _operationService.CreateAsync(createDto);
 
             return CreatedAtAction(nameof(GetById), new { id = createdOperation.Id, version = "1.0" }, createdOperation);
@@ -109,35 +94,25 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
         /// <param name="updateDto">Os novos dados para a operação.</param>
         /// <returns>O objeto atualizado.</returns>
         /// <response code="200">Retorna a operação atualizada.</response>
-        /// <response code="400">Se os dados fornecidos forem inválidos (validação do DTO ou tratado pelo middleware).</response>
-        /// <response code="404">Se a operação não for encontrada (tratado pelo middleware via NotFoundException).</response>
-        /// <response code="409">Se houver conflito (ex: nome duplicado ou item inativo) (tratado pelo middleware via ConflictException).</response>
-        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente pelo middleware).</response>
+        /// <response code="400">If the provided data is invalid.</response>
+        /// <response code="404">If the operation is not found (handled by middleware via NotFoundException).</response>
+        /// <response code="409">If there is a conflict (e.g., duplicate name or inactive item) (handled by middleware via ConflictException).</response>
+        /// <response code="500">If an unexpected server error occurs (handled globally by middleware).</response>
         [HttpPut("{id}")]
         [ProducesResponseType(typeof(OperationDto), 200)]
         [ProducesResponseType(400)]
-        [ProducesResponseType(404)] // Documenta a resposta 404 esperada
-        [ProducesResponseType(409)] // Documenta a resposta 409 esperada
-        [ProducesResponseType(500)] // Mantido para documentação
+        [ProducesResponseType(404)]
+        [ProducesResponseType(409)]
+        [ProducesResponseType(500)]
         public async Task<ActionResult<OperationDto>> Update(int id, [FromBody] UpdateOperationDto updateDto)
         {
-            // Mantém a validação inicial do ModelState
             if (!ModelState.IsValid)
             {
                 return BadRequest(ModelState);
-                // Ou, para consistência: throw new ValidationException(...)
             }
 
-            // Não precisa de try-catch ou if (updatedOperation == null).
-            // O serviço lançará NotFoundException ou ConflictException, e o middleware tratará.
+            // Service will throw exceptions (NotFound, Conflict, Validation, etc.), middleware handles them.
             var updatedOperation = await _operationService.UpdateAsync(id, updateDto);
-
-            // O serviço agora lança exceção se não encontrar, então este null check não é mais necessário
-            // if (updatedOperation == null)
-            // {
-            //     _logger.LogWarning("Operação com ID {Id} não encontrada para atualização.", id);
-            //     return NotFound($"Operação com ID {id} não encontrada.");
-            // }
 
             return Ok(updatedOperation);
         }
@@ -153,24 +128,15 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
         /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente pelo middleware).</response>
         [HttpDelete("{id}")]
         [ProducesResponseType(204)]
-        [ProducesResponseType(404)] // Documenta a resposta 404 esperada
-        [ProducesResponseType(409)] // Documenta a resposta 409 esperada (se implementar validação de dependência)
-        [ProducesResponseType(500)] // Mantido para documentação
+        [ProducesResponseType(404)]
+        [ProducesResponseType(409)]
+        [ProducesResponseType(500)]
         public async Task<IActionResult> Delete(int id)
         {
-            // Não precisa de try-catch ou if (!success).
-            // O serviço lançará NotFoundException ou ConflictException (se implementado), e o middleware tratará.
-            // Se o serviço retornar true (já inativo), o NoContent() é retornado.
+            // Service will throw exceptions (NotFound, Conflict, etc.), middleware handles them.
             var success = await _operationService.DeleteAsync(id);
 
-            // Este check agora é tratado pela exceção no serviço
-            // if (!success)
-            // {
-            //     _logger.LogWarning("Operação com ID {Id} não encontrada para exclusão ou falha ao excluir.", id);
-            //     return NotFound($"Operação com ID {id} não encontrada.");
-            // }
-
-            return NoContent(); // Retorna 204 se o serviço indicar sucesso (inclusive se já estava inativo)
+            return NoContent(); // Returns 204 if the service indicates success (including if already inactive)
         }
     }
 }

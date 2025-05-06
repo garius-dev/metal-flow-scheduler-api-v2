@@ -1,5 +1,6 @@
-﻿// Arquivo: Domain/Interfaces/IOperationTypeService.cs
+﻿// Arquivo: Application/Interfaces/IOperationTypeService.cs
 using MetalFlowScheduler.Api.Application.Dtos;
+using MetalFlowScheduler.Api.Application.Exceptions; // Importar as exceções customizadas
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
@@ -42,7 +43,7 @@ namespace MetalFlowScheduler.Api.Application.Interfaces
         Task<OperationTypeDto> UpdateAsync(int id, UpdateOperationTypeDto updateDto);
 
         /// <summary>
-        /// Desabilita (soft delete) um tipo de operação. Lança NotFoundException se não encontrado.
+        /// Desabilita (soft delete) um tipo de operação. Lança NotFoundException se não encontrado, ConflictException se houver dependências ativas.
         /// </summary>
         /// <param name="id">O ID do tipo de operação a ser desabilitado.</param>
         /// <returns>True se a operação foi desabilitada ou já estava inativa.</returns>

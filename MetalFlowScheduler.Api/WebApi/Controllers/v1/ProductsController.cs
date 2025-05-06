@@ -1,26 +1,32 @@
 ﻿using Asp.Versioning;
 using MetalFlowScheduler.Api.Application.Dtos;
 using MetalFlowScheduler.Api.Application.Interfaces;
-// TODO: using MetalFlowScheduler.Api.Application.Exceptions; // Para exceções customizadas - Serão lançadas pelo serviço
+using MetalFlowScheduler.Api.Application.Exceptions; // For explicit documentation of exceptions if needed
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
-using System;
+using System; // For ArgumentNullException
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
 {
     /// <summary>
-    /// Controlador para gerenciar Produtos.
+    /// Controller for managing Products.
     /// </summary>
-    [ApiVersion("1.0")] // RG07: Versionamento
-    [Route("api/v{version:apiVersion}/[controller]")] // RG07: Rota versionada
+    [ApiVersion("1.0")]
+    [Route("api/v{version:apiVersion}/[controller]")]
     [ApiController]
+    // [Authorize(Roles = "Administrator,Manager")] // Example authorization
     public class ProductsController : ControllerBase
     {
         private readonly IProductService _productService;
         private readonly ILogger<ProductsController> _logger;
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ProductsController"/> class.
+        /// </summary>
+        /// <param name="productService">The product service.</param>
+        /// <param name="logger">The logger.</param>
         public ProductsController(IProductService productService, ILogger<ProductsController> logger)
         {
             _productService = productService ?? throw new ArgumentNullException(nameof(productService));
@@ -28,153 +34,116 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
         }
 
         /// <summary>
-        /// Obtém todos os produtos ativos.
+        /// Gets all enabled products.
         /// </summary>
-        /// <returns>Uma lista de produtos.</returns>
-        /// <response code="200">Retorna a lista de produtos ativos.</response>
-        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
+        /// <returns>A list of enabled products.</returns>
+        /// <response code="200">Returns the list of enabled products.</response>
+        /// <response code="500">If an unexpected error occurs.</response>
         [HttpGet]
         [ProducesResponseType(typeof(IEnumerable<ProductDto>), 200)]
-        [ProducesResponseType(500)] // Mantido para indicar que 500 é possível, mas tratado globalmente
-        public async Task<ActionResult<IEnumerable<ProductDto>>> GetAll()
+        public async Task<IActionResult> GetAllEnabled()
         {
-            // Removido try-catch genérico. Exceções serão tratadas por middleware global.
+            _logger.LogInformation("Attempting to get all enabled products.");
             var products = await _productService.GetAllEnabledAsync();
+            _logger.LogInformation("Successfully retrieved all enabled products.");
             return Ok(products);
         }
 
         /// <summary>
-        /// Obtém um produto específico pelo seu ID.
+        /// Gets a specific product by its ID.
         /// </summary>
-        /// <param name="id">O ID do produto.</param>
-        /// <returns>O produto encontrado.</returns>
-        /// <response code="200">Retorna o produto encontrado.</response>
-        /// <response code="404">Se o produto não for encontrado ou estiver inativo (tratado pelo serviço/middleware).</response>
-        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
+        /// <param name="id">The ID of the product.</param>
+        /// <returns>The product if found.</returns>
+        /// <response code="200">Returns the requested product.</response>
+        /// <response code="404">If the product is not found or not enabled.</response>
+        /// <response code="500">If an unexpected error occurs.</response>
         [HttpGet("{id}")]
         [ProducesResponseType(typeof(ProductDto), 200)]
         [ProducesResponseType(404)]
-        [ProducesResponseType(500)] // Mantido para indicar que 500 é possível, mas tratado globalmente
-        public async Task<ActionResult<ProductDto>> GetById(int id)
+        public async Task<IActionResult> GetById(int id)
         {
-            // Removido try-catch genérico. NotFound será retornado se o serviço retornar null
-            // ou se uma exceção de "não encontrado" for lançada pelo serviço e tratada globalmente.
+            _logger.LogInformation("Attempting to get product with ID: {ProductId}", id);
             var product = await _productService.GetByIdAsync(id);
-
-            if (product == null)
-            {
-                // O serviço GetByIdAsync já retorna null se não encontrar ou estiver inativo.
-                // Se você implementar exceções customizadas no serviço (ex: NotFoundException),
-                // este 'if' pode ser removido e o middleware global cuidaria do 404.
-                _logger.LogWarning("Produto com ID {Id} não encontrado (ou inativo).", id);
-                return NotFound($"Produto com ID {id} não encontrado.");
-            }
-
+            // NotFoundException will be handled by middleware
+            _logger.LogInformation("Successfully retrieved product with ID: {ProductId}", id);
             return Ok(product);
         }
 
         /// <summary>
-        /// Cria um novo produto, incluindo opcionalmente suas rotas de operação.
+        /// Creates a new product.
         /// </summary>
-        /// <param name="createDto">Os dados para criar o novo produto.</param>
-        /// <returns>O produto criado.</returns>
-        /// <response code="201">Retorna o produto recém-criado.</response>
-        /// <response code="400">Se os dados fornecidos forem inválidos (validação do DTO ou do serviço/middleware).</response>
-        /// <response code="409">Se houver conflito (ex: nome duplicado) (tratado pelo serviço/middleware).</response>
-        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
+        /// <param name="createDto">The product creation data.</param>
+        /// <returns>The created product.</returns>
+        /// <response code="201">Returns the newly created product.</response>
+        /// <response code="400">If the input data is invalid.</response>
+        /// <response code="409">If a product with the same name already exists and is active, or if related entities are invalid.</response>
+        /// <response code="500">If an unexpected error occurs.</response>
         [HttpPost]
         [ProducesResponseType(typeof(ProductDto), 201)]
-        [ProducesResponseType(400)]
-        [ProducesResponseType(409)] // Adicionado para indicar possível conflito (nome duplicado)
-        [ProducesResponseType(500)] // Mantido para indicar que 500 é possível, mas tratado globalmente
-        public async Task<ActionResult<ProductDto>> Create([FromBody] CreateProductDto createDto)
+        [ProducesResponseType(400)] // From ValidationException
+        [ProducesResponseType(409)] // From ConflictException
+        public async Task<IActionResult> Create([FromBody] CreateProductDto createDto)
         {
-            // Mantém a validação inicial do ModelState
             if (!ModelState.IsValid)
             {
-                return BadRequest(ModelState);
+                _logger.LogWarning("Create product request failed due to invalid model state.");
+                return BadRequest(ModelState); // Early exit for basic model validation
             }
 
-            // Removido try-catch genérico e tratamento específico de exceções de validação/negócio.
-            // Exceções lançadas pelo serviço (validação de IDs, nome duplicado, etc.)
-            // serão tratadas por middleware global, retornando 400 ou 409.
+            _logger.LogInformation("Attempting to create a new product with name: {ProductName}", createDto.Name);
             var createdProduct = await _productService.CreateAsync(createDto);
-
-            // Retorna 201 Created com a localização e o objeto criado
+            _logger.LogInformation("Successfully created product with ID: {ProductId} and name: {ProductName}", createdProduct.Id, createdProduct.Name);
             return CreatedAtAction(nameof(GetById), new { id = createdProduct.Id, version = "1.0" }, createdProduct);
         }
 
         /// <summary>
-        /// Atualiza um produto existente, gerenciando opcionalmente suas rotas de operação.
+        /// Updates an existing product.
         /// </summary>
-        /// <param name="id">O ID do produto a ser atualizado.</param>
-        /// <param name="updateDto">Os novos dados para o produto.</param>
-        /// <returns>O produto atualizado.</returns>
-        /// <response code="200">Retorna o produto atualizado.</response>
-        /// <response code="400">Se os dados fornecidos forem inválidos (validação do DTO ou do serviço/middleware).</response>
-        /// <response code="404">Se o produto não for encontrado (tratado pelo serviço/middleware).</response>
-        /// <response code="409">Se houver conflito (ex: nome duplicado) (tratado pelo serviço/middleware).</response>
-        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
+        /// <param name="id">The ID of the product to update.</param>
+        /// <param name="updateDto">The product update data.</param>
+        /// <returns>The updated product.</returns>
+        /// <response code="200">Returns the updated product.</response>
+        /// <response code="400">If the input data is invalid.</response>
+        /// <response code="404">If the product to update is not found.</response>
+        /// <response code="409">If the update causes a name conflict with another active product, if the product is inactive, or if related entities are invalid.</response>
+        /// <response code="500">If an unexpected error occurs.</response>
         [HttpPut("{id}")]
         [ProducesResponseType(typeof(ProductDto), 200)]
-        [ProducesResponseType(400)]
-        [ProducesResponseType(404)]
-        [ProducesResponseType(409)] // Adicionado para indicar possível conflito (nome duplicado)
-        [ProducesResponseType(500)] // Mantido para indicar que 500 é possível, mas tratado globalmente
-        public async Task<ActionResult<ProductDto>> Update(int id, [FromBody] UpdateProductDto updateDto)
+        [ProducesResponseType(400)] // From ValidationException
+        [ProducesResponseType(404)] // From NotFoundException
+        [ProducesResponseType(409)] // From ConflictException
+        public async Task<IActionResult> Update(int id, [FromBody] UpdateProductDto updateDto)
         {
-            // Mantém a validação inicial do ModelState
             if (!ModelState.IsValid)
             {
+                _logger.LogWarning("Update product request for ID {ProductId} failed due to invalid model state.", id);
                 return BadRequest(ModelState);
             }
 
-            // Removido try-catch genérico e tratamento específico de exceções de validação/negócio.
-            // Exceções lançadas pelo serviço (validação de IDs, nome duplicado, item inativo, etc.)
-            // serão tratadas por middleware global, retornando 400 ou 409.
-            // O serviço UpdateAsync retornará null se não encontrar a entidade.
+            _logger.LogInformation("Attempting to update product with ID: {ProductId}", id);
             var updatedProduct = await _productService.UpdateAsync(id, updateDto);
-
-            if (updatedProduct == null)
-            {
-                // O serviço UpdateAsync já retorna null se não encontrar.
-                // Se você implementar exceções customizadas no serviço (ex: NotFoundException),
-                // este 'if' pode ser removido e o middleware global cuidaria do 404.
-                _logger.LogWarning("Produto com ID {Id} não encontrado para atualização.", id);
-                return NotFound($"Produto com ID {id} não encontrado.");
-            }
-
+            _logger.LogInformation("Successfully updated product with ID: {ProductId}", id);
             return Ok(updatedProduct);
         }
 
         /// <summary>
-        /// Desabilita (soft delete) um produto.
+        /// Disables (soft deletes) a product.
         /// </summary>
-        /// <param name="id">O ID do produto a ser desabilitado.</param>
-        /// <returns>Nenhum conteúdo.</returns>
-        /// <response code="204">Produto desabilitado com sucesso.</response>
-        /// <response code="404">Se o produto não for encontrado (tratado pelo serviço/middleware).</response>
-        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
+        /// <param name="id">The ID of the product to disable.</param>
+        /// <returns>No content if successful.</returns>
+        /// <response code="204">Product disabled successfully.</response>
+        /// <response code="404">If the product to disable is not found.</response>
+        /// <response code="409">If the product cannot be disabled due to business rule violations (e.g., active dependencies).</response>
+        /// <response code="500">If an unexpected error occurs.</response>
         [HttpDelete("{id}")]
         [ProducesResponseType(204)]
-        [ProducesResponseType(404)]
-        [ProducesResponseType(500)] // Mantido para indicar que 500 é possível, mas tratado globalmente
+        [ProducesResponseType(404)] // From NotFoundException
+        [ProducesResponseType(409)] // From ConflictException
         public async Task<IActionResult> Delete(int id)
         {
-            // Removido try-catch genérico. Exceções lançadas pelo serviço
-            // serão tratadas por middleware global.
-            // O serviço DeleteAsync retornará false se não encontrar a entidade.
-            var success = await _productService.DeleteAsync(id);
-
-            if (!success)
-            {
-                // O serviço DeleteAsync já retorna false se não encontrar.
-                // Se você implementar exceções customizadas no serviço (ex: NotFoundException),
-                // este 'if' pode ser removido e o middleware global cuidaria do 404.
-                _logger.LogWarning("Produto com ID {Id} não encontrado para exclusão ou falha ao excluir.", id);
-                return NotFound($"Produto com ID {id} não encontrado.");
-            }
-
+            _logger.LogInformation("Attempting to disable product with ID: {ProductId}", id);
+            await _productService.DeleteAsync(id);
+            _logger.LogInformation("Successfully disabled product with ID: {ProductId}", id);
             return NoContent();
         }
     }
