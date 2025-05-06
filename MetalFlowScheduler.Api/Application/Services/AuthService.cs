@@ -2,7 +2,7 @@
 using MetalFlowScheduler.Api.Application.Dtos.Auth;
 using MetalFlowScheduler.Api.Application.Interfaces;
 using MetalFlowScheduler.Api.Domain.Entities.Identity;
-using Microsoft.AspNetCore.Identity; // Necessário para UserManager e SignInManager
+using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 using System;
@@ -10,8 +10,11 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
 using System.Threading.Tasks;
-using System.Linq; // Necessário para Select
-using Microsoft.Extensions.Logging; // Necessário para ILogger
+using System.Linq;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using System.Collections.Generic;
+using MetalFlowScheduler.Api.Configuration;
 
 namespace MetalFlowScheduler.Api.Application.Services
 {
@@ -19,19 +22,22 @@ namespace MetalFlowScheduler.Api.Application.Services
     {
         private readonly UserManager<ApplicationUser> _userManager;
         private readonly SignInManager<ApplicationUser> _signInManager;
-        private readonly IConfiguration _configuration;
-        private readonly ILogger<AuthService> _logger; // Adicionado logger
+        private readonly RoleManager<ApplicationRole> _roleManager;
+        private readonly ILogger<AuthService> _logger;
+        private readonly JwtSecretConfig _jwtSettings;
 
         public AuthService(
             UserManager<ApplicationUser> userManager,
             SignInManager<ApplicationUser> signInManager,
-            IConfiguration configuration,
-            ILogger<AuthService> logger) // Injetar logger
+            RoleManager<ApplicationRole> roleManager,
+            ILogger<AuthService> logger,
+            IOptions<JwtSecretConfig> jwtSettings)
         {
             _userManager = userManager ?? throw new ArgumentNullException(nameof(userManager));
             _signInManager = signInManager ?? throw new ArgumentNullException(nameof(signInManager));
-            _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
-            _logger = logger ?? throw new ArgumentNullException(nameof(logger)); // Inicializar logger
+            _roleManager = roleManager ?? throw new ArgumentNullException(nameof(roleManager));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _jwtSettings = jwtSettings?.Value ?? throw new ArgumentNullException(nameof(jwtSettings));
         }
 
         /// <inheritdoc/>
@@ -41,33 +47,18 @@ namespace MetalFlowScheduler.Api.Application.Services
             {
                 UserName = request.Username,
                 Email = request.Email,
-                // Outras propriedades customizadas podem ser mapeadas aqui, se houver
-                // FullName = request.FullName,
-                // IsActive = true // Identity já gerencia status com LockoutEnabled
             };
 
-            // O UserManager cuida do hashing da senha de forma segura
             var result = await _userManager.CreateAsync(user, request.Password);
 
-            // Opcional: Atribuir uma role padrão ao novo usuário
+            // Opcional: Atribuir uma role padrão (ex: "User") aqui, se aplicável a todos os registros públicos
             // if (result.Succeeded)
             // {
-            //     if (!string.IsNullOrEmpty(request.Role))
+            //     if (!await _roleManager.RoleExistsAsync("User"))
             //     {
-            //         // Crie a role se ela não existir
-            //         if (!await _userManager.IsInRoleAsync(user, request.Role))
-            //         {
-            //              // Você precisaria de um RoleManager injetado para criar roles
-            //              // var roleExists = await _roleManager.RoleExistsAsync(request.Role);
-            //              // if (!roleExists) await _roleManager.CreateAsync(new ApplicationRole(request.Role));
-            //              // await _userManager.AddToRoleAsync(user, request.Role);
-            //         }
+            //         await _roleManager.CreateAsync(new ApplicationRole("User"));
             //     }
-            //     else
-            //     {
-            //          // Atribuir uma role padrão se nenhuma for especificada
-            //          // await _userManager.AddToRoleAsync(user, "User");
-            //     }
+            //     await _userManager.AddToRoleAsync(user, "User");
             // }
 
             return result;
@@ -76,59 +67,41 @@ namespace MetalFlowScheduler.Api.Application.Services
         /// <inheritdoc/>
         public async Task<LoginResponseDto?> AuthenticateAsync(string username, string password)
         {
-            // O SignInManager cuida da validação da senha (comparando o hash) e verifica status do usuário (bloqueio, etc.)
             var result = await _signInManager.PasswordSignInAsync(username, password, isPersistent: false, lockoutOnFailure: true);
 
             if (!result.Succeeded)
             {
-                // Log tentativas de login falhas para monitoramento de segurança
                 _logger.LogWarning("Falha na autenticação para o usuário: {Username}. Resultado: {SignInResult}", username, result);
-                return null; // Autenticação falhou
+                return null;
             }
 
-            // Autenticação bem-sucedida, buscar o usuário para gerar o token
             var user = await _userManager.FindByNameAsync(username);
             if (user == null)
             {
                 _logger.LogError("Usuário {Username} autenticado com sucesso, mas não encontrado no UserManager. Isso não deveria acontecer.", username);
-                return null; // Falha inesperada
+                return null;
             }
 
-            // Gerar JWT
-
-            //var _jwtSecret = builder.Configuration["JwtSettings--Secret"];
-            //var _jwtIssuer = builder.Configuration["JwtSettings--Issuer"];
-            //var _jwtAudience = builder.Configuration["JwtSettings--Audience"];
-
             var tokenHandler = new JwtSecurityTokenHandler();
-            var jwtSettings = _configuration.GetSection("JwtSettings");
-            var key = Encoding.ASCII.GetBytes(jwtSettings["Secret"]);
-            var expirationTime = DateTime.UtcNow.AddMinutes(double.Parse(jwtSettings["ExpirationInMinutes"]));
+            var key = Encoding.ASCII.GetBytes(_jwtSettings.Secret);
+            var expirationTime = DateTime.UtcNow.AddMinutes(_jwtSettings.ExpirationInMinutes);
 
-            // Obter claims do usuário, incluindo roles
+            // Obter claims do usuário, incluindo roles e claims customizadas do banco de dados
             var claims = (await _userManager.GetClaimsAsync(user)).ToList();
             claims.AddRange(new Claim[]
             {
-                new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()), // ID do usuário
-                new Claim(ClaimTypes.Name, user.UserName), // Nome de usuário
-                new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()), // Subject (comum em JWT)
-                new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()) // JWT ID
-                // Adicionar outras claims importantes
+                new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+                new Claim(ClaimTypes.Name, user.UserName),
+                new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
+                new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
             });
-
-            // Adicionar claims de roles
-            var roles = await _userManager.GetRolesAsync(user);
-            foreach (var role in roles)
-            {
-                claims.Add(new Claim(ClaimTypes.Role, role));
-            }
 
             var tokenDescriptor = new SecurityTokenDescriptor
             {
                 Subject = new ClaimsIdentity(claims),
                 Expires = expirationTime,
-                Issuer = jwtSettings["Issuer"],
-                Audience = jwtSettings["Audience"],
+                Issuer = _jwtSettings.Issuer,
+                Audience = _jwtSettings.Audience,
                 SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature)
             };
 
@@ -138,13 +111,318 @@ namespace MetalFlowScheduler.Api.Application.Services
             return new LoginResponseDto
             {
                 Token = tokenString,
-                UserId = user.Id, // Identity usa Id (int) por padrão com IdentityUser<int>
+                UserId = user.Id,
                 Username = user.UserName
             };
         }
 
-        // Opcional: Implementar outros métodos da interface IAuthService
-        // public async Task<bool> AssignRoleAsync(string userId, string roleName) { ... }
-        // public async Task<IEnumerable<string>> GetUserRolesAsync(string userId) { ... }
+        /// <inheritdoc/>
+        public async Task<IdentityResult> AssignRoleAsync(int userId, string roleName)
+        {
+            var user = await _userManager.FindByIdAsync(userId.ToString());
+
+            if (user == null)
+            {
+                var errors = new List<IdentityError>
+                {
+                    new IdentityError { Code = "UserNotFound", Description = $"Usuário com ID {userId} não encontrado." }
+                };
+                _logger.LogWarning("Tentativa de atribuir role a usuário não encontrado: ID {UserId}", userId);
+                return IdentityResult.Failed(errors.ToArray());
+            }
+
+            var roleExists = await _roleManager.RoleExistsAsync(roleName);
+            if (!roleExists)
+            {
+                var errors = new List<IdentityError>
+                {
+                    new IdentityError { Code = "RoleNotFound", Description = $"Role '{roleName}' não encontrada." }
+                };
+                _logger.LogWarning("Tentativa de atribuir role inexistente '{RoleName}' ao usuário ID {UserId}", roleName, userId);
+                return IdentityResult.Failed(errors.ToArray());
+            }
+
+            var result = await _userManager.AddToRoleAsync(user, roleName);
+
+            if (result.Succeeded)
+            {
+                _logger.LogInformation("Role '{RoleName}' atribuída ao usuário ID {UserId}.", roleName, userId);
+            }
+            else
+            {
+                _logger.LogWarning("Falha ao atribuir role '{RoleName}' ao usuário ID {UserId}. Erros: {Errors}", roleName, userId, string.Join(", ", result.Errors.Select(e => e.Description)));
+            }
+
+            return result;
+        }
+
+        /// <inheritdoc/>
+        public async Task<IdentityResult> AddClaimAsync(int userId, string claimType, string claimValue)
+        {
+            var user = await _userManager.FindByIdAsync(userId.ToString());
+
+            if (user == null)
+            {
+                var errors = new List<IdentityError>
+                {
+                    new IdentityError { Code = "UserNotFound", Description = $"Usuário com ID {userId} não encontrado." }
+                };
+                _logger.LogWarning("Tentativa de adicionar claim a usuário não encontrado: ID {UserId}", userId);
+                return IdentityResult.Failed(errors.ToArray());
+            }
+
+            var claim = new Claim(claimType, claimValue);
+
+            var result = await _userManager.AddClaimAsync(user, claim);
+
+            if (result.Succeeded)
+            {
+                _logger.LogInformation("Claim '{ClaimType}:{ClaimValue}' adicionada ao usuário ID {UserId}.", claimType, claimValue, userId);
+            }
+            else
+            {
+                _logger.LogWarning("Falha ao adicionar claim '{ClaimType}:{ClaimValue}' ao usuário ID {UserId}. Erros: {Errors}", claimType, claimValue, userId, string.Join(", ", result.Errors.Select(e => e.Description)));
+            }
+
+            return result;
+        }
+
+        /// <inheritdoc/>
+        public async Task<IdentityResult> UpdateUserPermissionsAsync(UpdateUserPermissionsDto request)
+        {
+            var user = await _userManager.FindByIdAsync(request.UserId.ToString());
+
+            if (user == null)
+            {
+                var errors = new List<IdentityError>
+                {
+                    new IdentityError { Code = "UserNotFound", Description = $"Usuário com ID {request.UserId} não encontrado." }
+                };
+                _logger.LogWarning("Tentativa de atualizar permissões para usuário não encontrado: ID {UserId}", request.UserId);
+                return IdentityResult.Failed(errors.ToArray());
+            }
+
+            var errorsList = new List<IdentityError>();
+
+            // --- Gerenciar Roles ---
+            if (request.Roles != null)
+            {
+                var currentRoles = await _userManager.GetRolesAsync(user);
+                var desiredRoles = request.Roles.Distinct().ToList();
+
+                // Roles para remover: as que o usuário tem mas não estão na lista desejada
+                var rolesToRemove = currentRoles.Except(desiredRoles).ToList();
+                foreach (var roleToRemove in rolesToRemove)
+                {
+                    var removeResult = await _userManager.RemoveFromRoleAsync(user, roleToRemove);
+                    if (!removeResult.Succeeded)
+                    {
+                        errorsList.AddRange(removeResult.Errors);
+                        _logger.LogWarning("Falha ao remover role '{RoleName}' do usuário ID {UserId}. Erros: {Errors}", roleToRemove, request.UserId, string.Join(", ", removeResult.Errors.Select(e => e.Description)));
+                    }
+                }
+
+                // Roles para adicionar: as que estão na lista desejada mas o usuário não tem
+                var rolesToAdd = desiredRoles.Except(currentRoles).ToList();
+                foreach (var roleToAdd in rolesToAdd)
+                {
+                    // Verificar se a role a ser adicionada existe no sistema antes de tentar adicionar
+                    if (!await _roleManager.RoleExistsAsync(roleToAdd))
+                    {
+                        errorsList.Add(new IdentityError { Code = "RoleNotFound", Description = $"Role '{roleToAdd}' não encontrada." });
+                        _logger.LogWarning("Tentativa de adicionar role inexistente '{RoleName}' ao usuário ID {UserId} durante atualização de permissões.", roleToAdd, request.UserId);
+                        continue; // Pula para a próxima role se não existir
+                    }
+
+                    var addResult = await _userManager.AddToRoleAsync(user, roleToAdd);
+                    if (!addResult.Succeeded)
+                    {
+                        errorsList.AddRange(addResult.Errors);
+                        _logger.LogWarning("Falha ao adicionar role '{RoleName}' ao usuário ID {UserId}. Erros: {Errors}", roleToAdd, request.UserId, string.Join(", ", addResult.Errors.Select(e => e.Description)));
+                    }
+                }
+            }
+
+            // --- Gerenciar Claims ---
+            if (request.Claims != null)
+            {
+                var currentClaims = await _userManager.GetClaimsAsync(user);
+                var desiredClaims = request.Claims.Select(c => new Claim(c.Type, c.Value)).ToList();
+
+                // Para simplificar, vamos gerenciar claims por TIPO.
+                // Remove todas as claims existentes para os tipos presentes na lista desejada.
+                var claimTypesToManage = desiredClaims.Select(c => c.Type).Distinct().ToList();
+                var claimsToRemoveExisting = currentClaims.Where(c => claimTypesToManage.Contains(c.Type)).ToList();
+
+                foreach (var claimToRemove in claimsToRemoveExisting)
+                {
+                    var removeResult = await _userManager.RemoveClaimAsync(user, claimToRemove);
+                    if (!removeResult.Succeeded)
+                    {
+                        errorsList.AddRange(removeResult.Errors);
+                        _logger.LogWarning("Falha ao remover claim existente '{ClaimType}:{ClaimValue}' do usuário ID {UserId} durante atualização de permissões. Erros: {Errors}", claimToRemove.Type, claimToRemove.Value, request.UserId, string.Join(", ", removeResult.Errors.Select(e => e.Description)));
+                    }
+                }
+
+                // Adiciona todas as claims da lista desejada
+                foreach (var claimToAdd in desiredClaims)
+                {
+                    var addResult = await _userManager.AddClaimAsync(user, claimToAdd);
+                    if (!addResult.Succeeded)
+                    {
+                        errorsList.AddRange(addResult.Errors);
+                        _logger.LogWarning("Falha ao adicionar claim '{ClaimType}:{ClaimValue}' ao usuário ID {UserId} durante atualização de permissões. Erros: {Errors}", claimToAdd.Type, claimToAdd.Value, request.UserId, string.Join(", ", addResult.Errors.Select(e => e.Description)));
+                    }
+                }
+            }
+
+            if (errorsList.Any())
+            {
+                return IdentityResult.Failed(errorsList.ToArray());
+            }
+
+            _logger.LogInformation("Permissões (roles e claims) atualizadas com sucesso para o usuário ID {UserId}.", request.UserId);
+            return IdentityResult.Success;
+        }
+
+        /// <inheritdoc/>
+        public async Task<IdentityResult> RemoveRoleAsync(int userId, string roleName)
+        {
+            var user = await _userManager.FindByIdAsync(userId.ToString());
+
+            if (user == null)
+            {
+                var errors = new List<IdentityError>
+                {
+                    new IdentityError { Code = "UserNotFound", Description = $"Usuário com ID {userId} não encontrado." }
+                };
+                _logger.LogWarning("Tentativa de remover role de usuário não encontrado: ID {UserId}", userId);
+                return IdentityResult.Failed(errors.ToArray());
+            }
+
+            // Opcional: Verificar se a role existe antes de tentar remover (RemoveFromRoleAsync já lida se o user não tiver a role)
+            // var roleExists = await _roleManager.RoleExistsAsync(roleName);
+            // if (!roleExists) { ... return RoleNotFound error ... }
+
+            var result = await _userManager.RemoveFromRoleAsync(user, roleName);
+
+            if (result.Succeeded)
+            {
+                _logger.LogInformation("Role '{RoleName}' removida do usuário ID {UserId}.", roleName, userId);
+            }
+            else
+            {
+                _logger.LogWarning("Falha ao remover role '{RoleName}' do usuário ID {UserId}. Erros: {Errors}", roleName, userId, string.Join(", ", result.Errors.Select(e => e.Description)));
+            }
+
+            return result;
+        }
+
+        /// <inheritdoc/>
+        public async Task<IdentityResult> RemoveClaimAsync(int userId, string claimType, string claimValue)
+        {
+            var user = await _userManager.FindByIdAsync(userId.ToString());
+
+            if (user == null)
+            {
+                var errors = new List<IdentityError>
+                {
+                    new IdentityError { Code = "UserNotFound", Description = $"Usuário com ID {userId} não encontrado." }
+                };
+                _logger.LogWarning("Tentativa de remover claim de usuário não encontrado: ID {UserId}", userId);
+                return IdentityResult.Failed(errors.ToArray());
+            }
+
+            // O UserManager.RemoveClaimAsync precisa da instância exata da Claim a ser removida.
+            // Precisamos encontrar a claim no usuário primeiro.
+            var claimToRemove = (await _userManager.GetClaimsAsync(user))
+                                .FirstOrDefault(c => c.Type == claimType && c.Value == claimValue);
+
+            if (claimToRemove == null)
+            {
+                // A claim não foi encontrada para este usuário
+                var errors = new List<IdentityError>
+                {
+                    new IdentityError { Code = "ClaimNotFound", Description = $"Claim '{claimType}:{claimValue}' não encontrada para o usuário com ID {userId}." }
+                };
+                _logger.LogWarning("Tentativa de remover claim inexistente '{ClaimType}:{ClaimValue}' do usuário ID {UserId}.", claimType, claimValue, userId);
+                return IdentityResult.Failed(errors.ToArray());
+            }
+
+            var result = await _userManager.RemoveClaimAsync(user, claimToRemove);
+
+            if (result.Succeeded)
+            {
+                _logger.LogInformation("Claim '{ClaimType}:{ClaimValue}' removida do usuário ID {UserId}.", claimType, claimValue, userId);
+            }
+            else
+            {
+                _logger.LogWarning("Falha ao remover claim '{ClaimType}:{ClaimValue}' do usuário ID {UserId}. Erros: {Errors}", claimType, claimValue, userId, string.Join(", ", result.Errors.Select(e => e.Description)));
+            }
+
+            return result;
+        }
+
+        /// <inheritdoc/>
+        public async Task<IEnumerable<string>> GetUserRolesAsync(int userId)
+        {
+            var user = await _userManager.FindByIdAsync(userId.ToString());
+
+            if (user == null)
+            {
+                // Em um GET, retornar uma lista vazia para um usuário não encontrado é aceitável,
+                // ou você pode lançar uma exceção customizada (ex: NotFoundException)
+                _logger.LogWarning("Tentativa de obter roles de usuário não encontrado: ID {UserId}", userId);
+                return Enumerable.Empty<string>();
+            }
+
+            return await _userManager.GetRolesAsync(user);
+        }
+
+        /// <inheritdoc/>
+        public async Task<IList<Claim>> GetUserClaimsAsync(int userId)
+        {
+            var user = await _userManager.FindByIdAsync(userId.ToString());
+
+            if (user == null)
+            {
+                // Em um GET, retornar uma lista vazia para um usuário não encontrado é aceitável,
+                // ou você pode lançar uma exceção customizada (ex: NotFoundException)
+                _logger.LogWarning("Tentativa de obter claims de usuário não encontrado: ID {UserId}", userId);
+                return new List<Claim>(); // Retorna lista vazia
+            }
+
+            return await _userManager.GetClaimsAsync(user);
+        }
+
+        /// <inheritdoc/>
+        public async Task<IdentityResult> DeleteUserAsync(int userId)
+        {
+            var user = await _userManager.FindByIdAsync(userId.ToString());
+
+            if (user == null)
+            {
+                var errors = new List<IdentityError>
+                {
+                    new IdentityError { Code = "UserNotFound", Description = $"Usuário com ID {userId} não encontrado." }
+                };
+                _logger.LogWarning("Tentativa de remover usuário não encontrado: ID {UserId}", userId);
+                return IdentityResult.Failed(errors.ToArray());
+            }
+
+            // UserManager.DeleteAsync remove o usuário, suas roles e suas claims automaticamente.
+            var result = await _userManager.DeleteAsync(user);
+
+            if (result.Succeeded)
+            {
+                _logger.LogInformation("Usuário com ID {UserId} removido com sucesso.", userId);
+            }
+            else
+            {
+                _logger.LogWarning("Falha ao remover usuário com ID {UserId}. Erros: {Errors}", userId, string.Join(", ", result.Errors.Select(e => e.Description)));
+            }
+
+            return result;
+        }
     }
 }

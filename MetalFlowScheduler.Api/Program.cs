@@ -23,6 +23,8 @@ using MetalFlowScheduler.Api.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
+using MetalFlowScheduler.Api.Helpers;
+using MetalFlowScheduler.Api.Extensions;
 
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Debug()
@@ -54,31 +56,38 @@ else
 
 
 // --- Configuração do bind das configs --- 
-JwtSecretConfig jwtSecretBinder = JsonConvert.DeserializeObject<JwtSecretConfig>(builder.Configuration["MetalFlowScheduler-JwtSettings"] ?? string.Empty)
-    ?? throw new InvalidOperationException("Falha ao desserializar o JSON do segredo em JwtSecrets. Verifique o formato do JSON.");
-builder.Services.AddSingleton(Options.Create(jwtSecretBinder));
-
-
-ConnectionStringsConfig connectionStringsConfigBinder = JsonConvert.DeserializeObject<ConnectionStringsConfig>(builder.Configuration["MetalFlowScheduler-ConnectionStrings"] ?? string.Empty)
-            ?? throw new InvalidOperationException("Falha ao desserializar o JSON em ConnectionStringsConfig. Verifique o formato do JSON.");
-
-
-ConnectionStringConfig connectionString = new ConnectionStringConfig();
-if (builder.Environment.IsDevelopment())
+JwtSecretConfig jwtSecretBinder = new JwtSecretConfig();
+ConnectionStringConfig currentConnectionString = new ConnectionStringConfig();
+try
 {
-    connectionString = connectionStringsConfigBinder.ConnectionStrings.FirstOrDefault(w => w.Environment == "dev")
-        ?? throw new InvalidOperationException("Falha ao coletar a ConnectionString do ambiente 'dev'.");
+    jwtSecretBinder = LoadConfigHelper.LoadConfigFromSecret<JwtSecretConfig>(builder.Configuration, "MetalFlowScheduler-JwtSettings");
+    builder.Services.AddSingleton(Options.Create(jwtSecretBinder));
+
+    ConnectionStringsConfig allConnectionStringConfigBinder = LoadConfigHelper.LoadConfigFromSecret<ConnectionStringsConfig>(builder.Configuration, "MetalFlowScheduler-ConnectionStrings");
+    currentConnectionString = LoadConfigHelper.GetConnectionStringForEnvironment(allConnectionStringConfigBinder, builder.Environment);
+    builder.Services.AddSingleton(Options.Create(currentConnectionString));
 }
-else
+catch (InvalidOperationException ex)
 {
-    connectionString = connectionStringsConfigBinder.ConnectionStrings.FirstOrDefault(w => w.Environment == "prod")
-        ?? throw new InvalidOperationException("Falha ao coletar a ConnectionString do ambiente 'prod'.");
+    Log.Fatal(ex, "Falha grave na configuração dos secrets da aplicação.");
+    // Considere sair da aplicação aqui se a configuração de secrets for crítica
+    Environment.Exit(1);
 }
-builder.Services.AddSingleton(Options.Create(connectionString));
+catch (JsonException ex)
+{
+    Log.Fatal(ex, "Falha ao desserializar a configuração JSON dos secrets.");
+    Environment.Exit(1);
+}
+catch (Exception ex)
+{
+    Log.Fatal(ex, "Ocorreu um erro inesperado ao carregar a configuração.");
+    Environment.Exit(1);
+}
+
 
 // --- Configuração do PostgreSQL --- 
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
-options.UseNpgsql(connectionString.ConnectionString,
+options.UseNpgsql(currentConnectionString.ConnectionString,
     npgsqlOptionsAction: sqlOptions =>
     {
         sqlOptions.EnableRetryOnFailure(
@@ -135,6 +144,7 @@ builder.Services.AddScoped<IOperationService, OperationService>();
 builder.Services.AddScoped<IWorkCenterService, WorkCenterService>();
 builder.Services.AddScoped<ILineService, LineService>();
 builder.Services.AddScoped<IProductService, ProductService>();
+builder.Services.AddScoped<IAuthService, AuthService>();
 
 // --- Configuração do Serilog ---
 builder.Host.UseSerilog();
@@ -191,7 +201,7 @@ builder.Services.AddAuthentication(options =>
 
 // --- Configuração de Autorização ---
 // Adiciona os serviços de autorização
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorization(options => AuthorizationPolicies.ConfigurePolicies(options));
 
 // --- Configuraçãodo Swagger ---
 builder.Services.AddEndpointsApiExplorer();
@@ -270,7 +280,6 @@ builder.Services.AddCors(options =>
 
 
 var app = builder.Build();
-
 
 
 
