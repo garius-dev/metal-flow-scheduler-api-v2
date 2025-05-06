@@ -65,6 +65,28 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1.Auth
         }
 
         /// <summary>
+        /// Realiza a operação de logout (principalmente do lado do servidor, se houver revogação).
+        /// </summary>
+        /// <returns>Uma resposta de sucesso.</returns>
+        /// <response code="200">Logout bem-sucedido.</response>
+        /// <response code="401">Se o usuário não estiver autenticado.</response>
+        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
+        [HttpPost("logout")] // Usando POST para logout
+        [Authorize] // Exige que o usuário esteja autenticado para fazer logout
+        [ProducesResponseType(200)]
+        [ProducesResponseType(401)]
+        [ProducesResponseType(500)]
+        public async Task<IActionResult> Logout()
+        {
+
+            await _authService.LogoutAsync();
+
+            _logger.LogInformation("Usuário autenticado solicitou logout.");
+
+            return Ok("Logout bem-sucedido.");
+        }
+
+        /// <summary>
         /// Registra um novo usuário no sistema.
         /// </summary>
         /// <param name="request">Dados para criação do usuário (username, email, senha).</param>
@@ -319,6 +341,59 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1.Auth
         }
 
         /// <summary>
+        /// Remove um usuário do sistema pelo seu ID. Requer permissões elevadas.
+        /// </summary>
+        /// <param name="userId">O ID do usuário a ser removido.</param>
+        /// <returns>Resultado da operação de remoção do usuário.</returns>
+        /// <response code="200">Usuário removido com sucesso.</response>
+        /// <response code="400">Se o ID do usuário for inválido ou a remoção falhar.</response>
+        /// <response code="401">Se o usuário não estiver autenticado.</response>
+        /// <response code="403">Se o usuário autenticado não tiver permissão para remover usuários ou se a lógica de restrição de usuário alvo negar a operação.</response>
+        /// <response code="404">Se o usuário não for encontrado.</response>
+        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
+        [HttpDelete("users/{userId}")]
+        [Authorize(Policy = "CanDeleteUsers")]
+        [ProducesResponseType(200)]
+        [ProducesResponseType(400)]
+        [ProducesResponseType(401)]
+        [ProducesResponseType(403)]
+        [ProducesResponseType(404)]
+        [ProducesResponseType(500)]
+        public async Task<IActionResult> DeleteUser(int userId)
+        {
+            if (userId <= 0)
+            {
+                return BadRequest("ID de usuário inválido.");
+            }
+
+            var result = await _authService.DeleteUserAsync(userId);
+
+            if (result.Succeeded)
+            {
+                return Ok($"Usuário com ID {userId} removido com sucesso.");
+            }
+            else
+            {
+                // Inspeciona os erros do IdentityResult
+                if (result.Errors.Any(e => e.Code == "UserNotFound"))
+                {
+                    // 404 Not Found - Usuário não encontrado
+                    _logger.LogWarning("Falha na remoção de usuário: Usuário com ID {UserId} não encontrado.", userId);
+                    return NotFound($"Usuário com ID {userId} não encontrado.");
+                }
+                if (result.Errors.Any(e => e.Code == "PermissionDenied"))
+                {
+                    // 403 Forbidden - Lógica de restrição no serviço negou a operação
+                    _logger.LogWarning("Falha na remoção de usuário: Permissão negada pelo serviço para usuário ID {UserId}.", userId);
+                    return StatusCode(403, "Você não tem permissão para remover este usuário.");
+                }
+                // Outros erros do Identity retornam 400
+                _logger.LogWarning("Falha na remoção de usuário com ID {UserId}. Erros: {Errors}", userId, string.Join(", ", result.Errors.Select(e => e.Description)));
+                return BadRequest(result.Errors); // Retorna os erros do IdentityResult
+            }
+        }
+
+        /// <summary>
         /// Remove uma claim de um usuário existente. Requer permissões elevadas.
         /// </summary>
         /// <param name="request">Dados para remoção de claim (ID do usuário, tipo e valor da claim).</param>
@@ -503,79 +578,5 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1.Auth
             return Ok(claims);
         }
 
-        /// <summary>
-        /// Remove um usuário do sistema pelo seu ID. Requer permissões elevadas.
-        /// </summary>
-        /// <param name="userId">O ID do usuário a ser removido.</param>
-        /// <returns>Resultado da operação de remoção do usuário.</returns>
-        /// <response code="200">Usuário removido com sucesso.</response>
-        /// <response code="400">Se o ID do usuário for inválido ou a remoção falhar.</response>
-        /// <response code="401">Se o usuário não estiver autenticado.</response>
-        /// <response code="403">Se o usuário autenticado não tiver permissão para remover usuários ou se a lógica de restrição de usuário alvo negar a operação.</response>
-        /// <response code="404">Se o usuário não for encontrado.</response>
-        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
-        [HttpDelete("users/{userId}")]
-        [Authorize(Policy = "CanDeleteUsers")]
-        [ProducesResponseType(200)]
-        [ProducesResponseType(400)]
-        [ProducesResponseType(401)]
-        [ProducesResponseType(403)]
-        [ProducesResponseType(404)]
-        [ProducesResponseType(500)]
-        public async Task<IActionResult> DeleteUser(int userId)
-        {
-            if (userId <= 0)
-            {
-                return BadRequest("ID de usuário inválido.");
-            }
-
-            var result = await _authService.DeleteUserAsync(userId);
-
-            if (result.Succeeded)
-            {
-                return Ok($"Usuário com ID {userId} removido com sucesso.");
-            }
-            else
-            {
-                // Inspeciona os erros do IdentityResult
-                if (result.Errors.Any(e => e.Code == "UserNotFound"))
-                {
-                    // 404 Not Found - Usuário não encontrado
-                    _logger.LogWarning("Falha na remoção de usuário: Usuário com ID {UserId} não encontrado.", userId);
-                    return NotFound($"Usuário com ID {userId} não encontrado.");
-                }
-                if (result.Errors.Any(e => e.Code == "PermissionDenied"))
-                {
-                    // 403 Forbidden - Lógica de restrição no serviço negou a operação
-                    _logger.LogWarning("Falha na remoção de usuário: Permissão negada pelo serviço para usuário ID {UserId}.", userId);
-                    return StatusCode(403, "Você não tem permissão para remover este usuário.");
-                }
-                // Outros erros do Identity retornam 400
-                _logger.LogWarning("Falha na remoção de usuário com ID {UserId}. Erros: {Errors}", userId, string.Join(", ", result.Errors.Select(e => e.Description)));
-                return BadRequest(result.Errors); // Retorna os erros do IdentityResult
-            }
-        }
-
-        /// <summary>
-        /// Realiza a operação de logout (principalmente do lado do servidor, se houver revogação).
-        /// </summary>
-        /// <returns>Uma resposta de sucesso.</returns>
-        /// <response code="200">Logout bem-sucedido.</response>
-        /// <response code="401">Se o usuário não estiver autenticado.</response>
-        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
-        [HttpPost("logout")] // Usando POST para logout
-        [Authorize] // Exige que o usuário esteja autenticado para fazer logout
-        [ProducesResponseType(200)]
-        [ProducesResponseType(401)]
-        [ProducesResponseType(500)]
-        public async Task<IActionResult> Logout()
-        {
-            
-            await _authService.LogoutAsync();
-
-            _logger.LogInformation("Usuário autenticado solicitou logout.");
-
-            return Ok("Logout bem-sucedido.");
-        }
     }
 }

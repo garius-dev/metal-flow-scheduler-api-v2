@@ -79,12 +79,11 @@ namespace MetalFlowScheduler.Api.Extensions
 
             options.AddPolicy("CanDeleteItems", policy =>
                 policy.RequireAuthenticatedUser()
-                      .RequireRole("Admin") 
+                      .RequireRole("Admin")
                       .RequireAssertion(context =>
                           context.User.IsInRole("Admin") &&
                           (context.User.IsInRole("Planejamento") || context.User.IsInRole("Owner") || context.User.IsInRole("Developer"))
                       )
-
             );
 
             // Adicione outras políticas aqui
