@@ -52,14 +52,14 @@ namespace MetalFlowScheduler.Api.Application.Services
             var result = await _userManager.CreateAsync(user, request.Password);
 
             // Opcional: Atribuir uma role padrão (ex: "User") aqui, se aplicável a todos os registros públicos
-            // if (result.Succeeded)
-            // {
-            //     if (!await _roleManager.RoleExistsAsync("User"))
-            //     {
-            //         await _roleManager.CreateAsync(new ApplicationRole("User"));
-            //     }
-            //     await _userManager.AddToRoleAsync(user, "User");
-            // }
+            if (result.Succeeded)
+            {
+                if (!await _roleManager.RoleExistsAsync("User"))
+                {
+                    await _roleManager.CreateAsync(new ApplicationRole("User"));
+                }
+                await _userManager.AddToRoleAsync(user, "User");
+            }
 
             return result;
         }
@@ -300,9 +300,26 @@ namespace MetalFlowScheduler.Api.Application.Services
                 return IdentityResult.Failed(errors.ToArray());
             }
 
-            // Opcional: Verificar se a role existe antes de tentar remover (RemoveFromRoleAsync já lida se o user não tiver a role)
-            // var roleExists = await _roleManager.RoleExistsAsync(roleName);
-            // if (!roleExists) { ... return RoleNotFound error ... }
+            // --- Lógica de Restrição de Remoção Baseada na Role do Usuário Alvo ---
+            var targetUserRoles = await _userManager.GetRolesAsync(user);
+
+            // Regra: Owner não pode remover roles de Developer
+            if (roleName.Equals("Developer", StringComparison.OrdinalIgnoreCase) && (await _userManager.IsInRoleAsync(user, "Developer")))
+            {
+                // NOTA: Esta verificação precisa ser feita APÓS a política de autorização do usuário que inicia a requisição.
+                // A política [Authorize(Policy="CanRemoveRoles")] já verifica se o usuário que inicia a requisição
+                // tem permissão para remover roles em geral. Esta lógica aqui verifica se ele pode remover ESTA role ESPECÍFICA
+                // deste USUÁRIO ALVO ESPECÍFICO.
+                // Para uma implementação mais robusta, a política de autorização deveria ser um Authorization Handler customizado.
+                var errors = new List<IdentityError>
+                {
+                    new IdentityError { Code = "PermissionDenied", Description = $"Não é possível remover a role '{roleName}' de um usuário." }
+                };
+                _logger.LogWarning("Tentativa de remover role protegida '{RoleName}' do usuário ID {UserId}.", roleName, userId);
+                return IdentityResult.Failed(errors.ToArray());
+            }
+            // --- Fim da Lógica de Restrição ---
+
 
             var result = await _userManager.RemoveFromRoleAsync(user, roleName);
 
@@ -349,6 +366,27 @@ namespace MetalFlowScheduler.Api.Application.Services
                 return IdentityResult.Failed(errors.ToArray());
             }
 
+            // --- Lógica de Restrição de Remoção Baseada na Role do Usuário Alvo ---
+            var targetUserRoles = await _userManager.GetRolesAsync(user);
+
+            // Regra: Admin não pode remover claims de Developer ou Owner
+            if ((targetUserRoles.Contains("Developer") || targetUserRoles.Contains("Owner")))
+            {
+                // NOTA: Esta verificação precisa ser feita APÓS a política de autorização do usuário que inicia a requisição.
+                // A política [Authorize(Policy="CanRemoveClaims")] já verifica se o usuário que inicia a requisição
+                // tem permissão para remover claims em geral. Esta lógica aqui verifica se ele pode remover claims
+                // deste USUÁRIO ALVO ESPECÍFICO.
+                // Para uma implementação mais robusta, a política de autorização deveria ser um Authorization Handler customizado.
+                var errors = new List<IdentityError>
+                {
+                    new IdentityError { Code = "PermissionDenied", Description = $"Não é possível remover claims de usuários com as roles Developer ou Owner." }
+                };
+                _logger.LogWarning("Tentativa de remover claim protegida '{ClaimType}:{ClaimValue}' do usuário ID {UserId} com roles protegidas.", claimType, claimValue, userId);
+                return IdentityResult.Failed(errors.ToArray());
+            }
+            // --- Fim da Lógica de Restrição ---
+
+
             var result = await _userManager.RemoveClaimAsync(user, claimToRemove);
 
             if (result.Succeeded)
@@ -370,8 +408,6 @@ namespace MetalFlowScheduler.Api.Application.Services
 
             if (user == null)
             {
-                // Em um GET, retornar uma lista vazia para um usuário não encontrado é aceitável,
-                // ou você pode lançar uma exceção customizada (ex: NotFoundException)
                 _logger.LogWarning("Tentativa de obter roles de usuário não encontrado: ID {UserId}", userId);
                 return Enumerable.Empty<string>();
             }
@@ -386,10 +422,8 @@ namespace MetalFlowScheduler.Api.Application.Services
 
             if (user == null)
             {
-                // Em um GET, retornar uma lista vazia para um usuário não encontrado é aceitável,
-                // ou você pode lançar uma exceção customizada (ex: NotFoundException)
                 _logger.LogWarning("Tentativa de obter claims de usuário não encontrado: ID {UserId}", userId);
-                return new List<Claim>(); // Retorna lista vazia
+                return new List<Claim>();
             }
 
             return await _userManager.GetClaimsAsync(user);
@@ -410,6 +444,41 @@ namespace MetalFlowScheduler.Api.Application.Services
                 return IdentityResult.Failed(errors.ToArray());
             }
 
+            // --- Lógica de Restrição de Remoção Baseada na Role do Usuário Alvo ---
+            var targetUserRoles = await _userManager.GetRolesAsync(user);
+
+            // Regra: Owner não pode remover Developer
+            if (targetUserRoles.Contains("Developer"))
+            {
+                // NOTA: Esta verificação precisa ser feita APÓS a política de autorização do usuário que inicia a requisição.
+                // A política [Authorize(Policy="CanDeleteUsers")] já verifica se o usuário que inicia a requisição
+                // tem permissão para deletar usuários em geral. Esta lógica aqui verifica se ele pode deletar ESTE USUÁRIO ESPECÍFICO.
+                // Para uma implementação mais robusta, a política de autorização deveria ser um Authorization Handler customizado.
+                var errors = new List<IdentityError>
+                {
+                    new IdentityError { Code = "PermissionDenied", Description = "Não é possível remover usuários com a role Developer." }
+                };
+                _logger.LogWarning("Tentativa de remover usuário com role protegida 'Developer'. Usuário alvo ID: {UserId}", userId);
+                return IdentityResult.Failed(errors.ToArray());
+            }
+
+            // Regra: Admin não pode remover Developer ou Owner
+            if ((targetUserRoles.Contains("Developer") || targetUserRoles.Contains("Owner")))
+            {
+                // NOTA: Esta verificação também precisa ser feita APÓS a política de autorização do usuário que inicia a requisição.
+                // A política [Authorize(Policy="CanDeleteUsers")] já verifica se o usuário que inicia a requisição
+                // tem permissão para deletar usuários em geral. Esta lógica aqui verifica se ele pode deletar ESTE USUÁRIO ESPECÍFICO.
+                // Para uma implementação mais robusta, um Authorization Handler customizado seria o ideal.
+                var errors = new List<IdentityError>
+                {
+                    new IdentityError { Code = "PermissionDenied", Description = "Não é possível remover usuários com as roles Developer ou Owner." }
+                };
+                _logger.LogWarning("Tentativa de remover usuário com role protegida 'Developer' ou 'Owner'. Usuário alvo ID: {UserId}", userId);
+                return IdentityResult.Failed(errors.ToArray());
+            }
+            // --- Fim da Lógica de Restrição ---
+
+
             // UserManager.DeleteAsync remove o usuário, suas roles e suas claims automaticamente.
             var result = await _userManager.DeleteAsync(user);
 
@@ -423,6 +492,23 @@ namespace MetalFlowScheduler.Api.Application.Services
             }
 
             return result;
+        }
+
+        /// <inheritdoc/>
+        public async Task<ApplicationUser?> GetUserByIdAsync(int userId)
+        {
+            // UserManager.FindByIdAsync retorna null se o usuário não for encontrado
+            return await _userManager.FindByIdAsync(userId.ToString());
+        }
+
+        /// <inheritdoc/>
+        public Task LogoutAsync()
+        {
+            // Para uma API JWT stateless, o logout é primariamente do lado do cliente.
+            // Se você implementar revogação de token, a lógica iria aqui (ex: adicionar JTI a um cache/DB).
+            // Por enquanto, apenas retorna uma tarefa completa.
+            _logger.LogInformation("Logout solicitado (operação no servidor não implementada para JWT stateless).");
+            return Task.CompletedTask;
         }
     }
 }

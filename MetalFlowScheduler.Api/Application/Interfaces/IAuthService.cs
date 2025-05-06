@@ -1,4 +1,5 @@
 ﻿using MetalFlowScheduler.Api.Application.Dtos.Auth;
+using MetalFlowScheduler.Api.Domain.Entities.Identity;
 using Microsoft.AspNetCore.Identity;
 using System.Threading.Tasks;
 using System.Collections.Generic;
@@ -87,5 +88,18 @@ namespace MetalFlowScheduler.Api.Application.Interfaces
         /// <param name="userId">O ID do usuário a ser removido.</param>
         /// <returns>Resultado da operação de remoção do usuário.</returns>
         Task<IdentityResult> DeleteUserAsync(int userId);
+
+        /// <summary>
+        /// Obtém um usuário pelo seu ID.
+        /// </summary>
+        /// <param name="userId">O ID do usuário.</param>
+        /// <returns>A entidade ApplicationUser, ou null se não encontrado.</returns>
+        Task<ApplicationUser?> GetUserByIdAsync(int userId);
+
+        /// <summary>
+        /// Realiza a operação de logout (principalmente do lado do servidor, se houver revogação).
+        /// </summary>
+        /// <returns>Uma tarefa completa.</returns>
+        Task LogoutAsync(); // Método para logout
     }
 }
