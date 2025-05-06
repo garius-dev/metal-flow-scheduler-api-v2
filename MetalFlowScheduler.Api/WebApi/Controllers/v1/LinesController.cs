@@ -1,12 +1,15 @@
-﻿using Asp.Versioning;
+﻿// Arquivo: WebApi/Controllers/v1/LinesController.cs
+using Asp.Versioning;
 using MetalFlowScheduler.Api.Application.Dtos;
 using MetalFlowScheduler.Api.Application.Interfaces;
-// TODO: using MetalFlowScheduler.Api.Application.Exceptions; // Para exceções customizadas - Serão lançadas pelo serviço
+// TODO: using MetalFlowScheduler.Api.Application.Exceptions; // Não precisa mais importar aqui, middleware trata
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+// Pode ser útil para lançar BadRequest(ModelState) como ValidationException, mas não é estritamente necessário para este refactoring.
+// using MetalFlowScheduler.Api.Application.Exceptions;
 
 namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
 {
@@ -32,13 +35,13 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
         /// </summary>
         /// <returns>Uma lista de linhas de produção.</returns>
         /// <response code="200">Retorna a lista de linhas ativas.</response>
-        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
+        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente pelo middleware).</response>
         [HttpGet]
         [ProducesResponseType(typeof(IEnumerable<LineDto>), 200)]
-        [ProducesResponseType(500)] // Mantido para indicar que 500 é possível, mas tratado globalmente
+        [ProducesResponseType(500)] // Mantido para documentação
         public async Task<ActionResult<IEnumerable<LineDto>>> GetAll()
         {
-            // Removido try-catch genérico. Exceções serão tratadas por middleware global.
+            // Não precisa de try-catch. Exceções do serviço (incluindo 500) serão tratadas pelo middleware.
             var lines = await _lineService.GetAllEnabledAsync();
             return Ok(lines);
         }
@@ -49,27 +52,18 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
         /// <param name="id">O ID da linha.</param>
         /// <returns>A linha encontrada.</returns>
         /// <response code="200">Retorna a linha encontrada.</response>
-        /// <response code="404">Se a linha não for encontrada ou estiver inativa (tratado pelo serviço/middleware).</response>
-        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
+        /// <response code="404">Se a linha não for encontrada ou estiver inativa (tratado pelo middleware via NotFoundException).</response>
+        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente pelo middleware).</response>
         [HttpGet("{id}")]
         [ProducesResponseType(typeof(LineDto), 200)]
-        [ProducesResponseType(404)]
-        [ProducesResponseType(500)] // Mantido para indicar que 500 é possível, mas tratado globalmente
+        [ProducesResponseType(404)] // Documenta a resposta 404 esperada
+        [ProducesResponseType(500)] // Mantido para documentação
         public async Task<ActionResult<LineDto>> GetById(int id)
         {
-            // Removido try-catch genérico. NotFound será retornado se o serviço retornar null
-            // ou se uma exceção de "não encontrado" for lançada pelo serviço e tratada globalmente.
+            // Não precisa de try-catch ou if (line == null).
+            // O serviço lançará NotFoundException se não encontrar ou estiver inativa,
+            // e o middleware converterá para 404.
             var line = await _lineService.GetByIdAsync(id);
-
-            if (line == null)
-            {
-                // O serviço GetByIdAsync já retorna null se não encontrar ou estiver inativo.
-                // Se você implementar exceções customizadas no serviço (ex: NotFoundException),
-                // este 'if' pode ser removido e o middleware global cuidaria do 404.
-                _logger.LogWarning("Linha com ID {Id} não encontrada (ou inativa).", id);
-                return NotFound($"Linha com ID {id} não encontrada.");
-            }
-
             return Ok(line);
         }
 
@@ -79,24 +73,30 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
         /// <param name="createDto">Os dados para criar a nova linha.</param>
         /// <returns>A linha criada.</returns>
         /// <response code="201">Retorna a linha recém-criada.</response>
-        /// <response code="400">Se os dados fornecidos forem inválidos (validação do DTO ou do serviço/middleware).</response>
-        /// <response code="409">Se houver conflito (ex: nome duplicado) (tratado pelo serviço/middleware).</response>
-        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
+        /// <response code="400">Se os dados fornecidos forem inválidos (validação do DTO ou tratado pelo middleware via ValidationException).</response>
+        /// <response code="409">Se houver conflito (ex: nome duplicado) (tratado pelo middleware via ConflictException).</response>
+        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente pelo middleware).</response>
         [HttpPost]
         [ProducesResponseType(typeof(LineDto), 201)]
         [ProducesResponseType(400)]
-        [ProducesResponseType(409)] // Adicionado para indicar possível conflito (nome duplicado)
-        [ProducesResponseType(500)] // Mantido para indicar que 500 é possível, mas tratado globalmente
+        [ProducesResponseType(409)] // Documenta a resposta 409 esperada
+        [ProducesResponseType(500)] // Mantido para documentação
         public async Task<ActionResult<LineDto>> Create([FromBody] CreateLineDto createDto)
         {
-            // Mantém a validação inicial do ModelState, que é uma boa prática
+            // Mantém a validação inicial do ModelState.
+            // Opcional: pode-se converter ModelState.IsValid em uma ValidationException aqui.
             if (!ModelState.IsValid)
             {
-                return BadRequest(ModelState);
+                return BadRequest(ModelState); // Retorna 400 com detalhes do ModelState
+                // Ou, para consistência com o middleware:
+                // throw new ValidationException(ModelState.Where(m => m.Value.Errors.Any()).ToDictionary(
+                //     kvp => kvp.Key,
+                //     kvp => kvp.Value.Errors.Select(e => e.ErrorMessage).ToArray()
+                // ));
             }
 
-            // Removido try-catch genérico. Exceções de validação, negócio ou DB
-            // lançadas pelo serviço serão tratadas por middleware global.
+            // Não precisa de try-catch. Exceções do serviço (ValidationException, ConflictException, etc.)
+            // serão tratadas pelo middleware.
             var createdLine = await _lineService.CreateAsync(createDto);
 
             // Retorna 201 Created com a localização e o objeto criado
@@ -110,37 +110,35 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
         /// <param name="updateDto">Os novos dados para a linha.</param>
         /// <returns>A linha atualizada.</returns>
         /// <response code="200">Retorna a linha atualizada.</response>
-        /// <response code="400">Se os dados fornecidos forem inválidos (validação do DTO ou do serviço/middleware).</response>
-        /// <response code="404">Se a linha não for encontrada (tratado pelo serviço/middleware).</response>
-        /// <response code="409">Se houver conflito (ex: nome duplicado) (tratado pelo serviço/middleware).</response>
-        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
+        /// <response code="400">Se os dados fornecidos forem inválidos (validação do DTO ou tratado pelo middleware).</response>
+        /// <response code="404">Se a linha não for encontrada (tratado pelo middleware via NotFoundException).</response>
+        /// <response code="409">Se houver conflito (ex: nome duplicado ou item inativo) (tratado pelo middleware via ConflictException).</response>
+        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente pelo middleware).</response>
         [HttpPut("{id}")]
         [ProducesResponseType(typeof(LineDto), 200)]
         [ProducesResponseType(400)]
-        [ProducesResponseType(404)]
-        [ProducesResponseType(409)] // Adicionado para indicar possível conflito (nome duplicado)
-        [ProducesResponseType(500)] // Mantido para indicar que 500 é possível, mas tratado globalmente
+        [ProducesResponseType(404)] // Documenta a resposta 404 esperada
+        [ProducesResponseType(409)] // Documenta a resposta 409 esperada
+        [ProducesResponseType(500)] // Mantido para documentação
         public async Task<ActionResult<LineDto>> Update(int id, [FromBody] UpdateLineDto updateDto)
         {
             // Mantém a validação inicial do ModelState
             if (!ModelState.IsValid)
             {
                 return BadRequest(ModelState);
+                // Ou, para consistência: throw new ValidationException(...)
             }
 
-            // Removido try-catch genérico. Exceções de validação, negócio ou DB
-            // lançadas pelo serviço serão tratadas por middleware global.
-            // O serviço UpdateAsync retornará null se não encontrar a entidade.
+            // Não precisa de try-catch ou if (updatedLine == null).
+            // O serviço lançará NotFoundException ou ConflictException, e o middleware tratará.
             var updatedLine = await _lineService.UpdateAsync(id, updateDto);
 
-            if (updatedLine == null)
-            {
-                // O serviço UpdateAsync já retorna null se não encontrar.
-                // Se você implementar exceções customizadas no serviço (ex: NotFoundException),
-                // este 'if' pode ser removido e o middleware global cuidaria do 404.
-                _logger.LogWarning("Linha com ID {Id} não encontrada para atualização.", id);
-                return NotFound($"Linha com ID {id} não encontrada.");
-            }
+            // O serviço agora lança exceção se não encontrar, então este null check não é mais necessário
+            // if (updatedLine == null)
+            // {
+            //     _logger.LogWarning("Linha com ID {Id} não encontrada para atualização.", id);
+            //     return NotFound($"Linha com ID {id} não encontrada.");
+            // }
 
             return Ok(updatedLine);
         }
@@ -151,29 +149,29 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
         /// <param name="id">O ID da linha a ser desabilitada.</param>
         /// <returns>Nenhum conteúdo.</returns>
         /// <response code="204">Linha desabilitada com sucesso.</response>
-        /// <response code="404">Se a linha não for encontrada (tratado pelo serviço/middleware).</response>
-        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
+        /// <response code="404">Se a linha não for encontrada (tratado pelo middleware via NotFoundException).</response>
+        /// <response code="409">Se houver conflito (ex: dependências ativas) (tratado pelo middleware via ConflictException).</response>
+        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente pelo middleware).</response>
         [HttpDelete("{id}")]
         [ProducesResponseType(204)]
-        [ProducesResponseType(404)]
-        [ProducesResponseType(500)] // Mantido para indicar que 500 é possível, mas tratado globalmente
+        [ProducesResponseType(404)] // Documenta a resposta 404 esperada
+        [ProducesResponseType(409)] // Documenta a resposta 409 esperada (se implementar validação de dependência)
+        [ProducesResponseType(500)] // Mantido para documentação
         public async Task<IActionResult> Delete(int id)
         {
-            // Removido try-catch genérico. Exceções lançadas pelo serviço
-            // serão tratadas por middleware global.
-            // O serviço DeleteAsync retornará false se não encontrar a entidade.
+            // Não precisa de try-catch ou if (!success).
+            // O serviço lançará NotFoundException ou ConflictException (se implementado), e o middleware tratará.
+            // Se o serviço retornar true (já inativo), o NoContent() é retornado.
             var success = await _lineService.DeleteAsync(id);
 
-            if (!success)
-            {
-                // O serviço DeleteAsync já retorna false se não encontrar.
-                // Se você implementar exceções customizadas no serviço (ex: NotFoundException),
-                // este 'if' pode ser removido e o middleware global cuidaria do 404.
-                _logger.LogWarning("Linha com ID {Id} não encontrada para exclusão ou falha ao excluir.", id);
-                return NotFound($"Linha com ID {id} não encontrada.");
-            }
+            // Este check agora é tratado pela exceção no serviço
+            // if (!success)
+            // {
+            //     _logger.LogWarning("Linha com ID {Id} não encontrada para exclusão ou falha ao excluir.", id);
+            //     return NotFound($"Linha com ID {id} não encontrada.");
+            // }
 
-            return NoContent();
+            return NoContent(); // Retorna 204 se o serviço indicar sucesso (inclusive se já estava inativo)
         }
     }
 }

@@ -1,7 +1,7 @@
-﻿using Asp.Versioning;
+﻿// Arquivo: WebApi/Controllers/v1/OperationTypesController.cs
+using Asp.Versioning;
 using MetalFlowScheduler.Api.Application.Dtos;
 using MetalFlowScheduler.Api.Application.Interfaces;
-// TODO: using MetalFlowScheduler.Api.Application.Exceptions; // Para exceções customizadas - Serão lançadas pelo serviço
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using System;
@@ -32,13 +32,12 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
         /// </summary>
         /// <returns>Uma lista de tipos de operação.</returns>
         /// <response code="200">Retorna a lista de tipos de operação ativos.</response>
-        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
+        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente pelo middleware).</response>
         [HttpGet]
         [ProducesResponseType(typeof(IEnumerable<OperationTypeDto>), 200)]
-        [ProducesResponseType(500)] // Mantido para indicar que 500 é possível, mas tratado globalmente
+        [ProducesResponseType(500)]
         public async Task<ActionResult<IEnumerable<OperationTypeDto>>> GetAll()
         {
-            // Removido try-catch genérico. Exceções serão tratadas por middleware global.
             var operationTypes = await _operationTypeService.GetAllEnabledAsync();
             return Ok(operationTypes);
         }
@@ -49,27 +48,15 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
         /// <param name="id">O ID do tipo de operação.</param>
         /// <returns>O tipo de operação encontrado.</returns>
         /// <response code="200">Retorna o tipo de operação encontrado.</response>
-        /// <response code="404">Se o tipo de operação não for encontrado ou estiver inativo (tratado pelo serviço/middleware).</response>
-        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
+        /// <response code="404">Se o tipo de operação não for encontrado ou estiver inativo (tratado pelo middleware via NotFoundException).</response>
+        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente pelo middleware).</response>
         [HttpGet("{id}")]
         [ProducesResponseType(typeof(OperationTypeDto), 200)]
         [ProducesResponseType(404)]
-        [ProducesResponseType(500)] // Mantido para indicar que 500 é possível, mas tratado globalmente
+        [ProducesResponseType(500)]
         public async Task<ActionResult<OperationTypeDto>> GetById(int id)
         {
-            // Removido try-catch genérico. NotFound será retornado se o serviço retornar null
-            // ou se uma exceção de "não encontrado" for lançada pelo serviço e tratada globalmente.
             var operationType = await _operationTypeService.GetByIdAsync(id);
-
-            if (operationType == null)
-            {
-                // O serviço GetByIdAsync já retorna null se não encontrar ou estiver inativo.
-                // Se você implementar exceções customizadas no serviço (ex: NotFoundException),
-                // este 'if' pode ser removido e o middleware global cuidaria do 404.
-                _logger.LogWarning("Tipo de Operação com ID {Id} não encontrado (ou inativo).", id);
-                return NotFound($"Tipo de Operação com ID {id} não encontrado.");
-            }
-
             return Ok(operationType);
         }
 
@@ -79,25 +66,21 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
         /// <param name="createDto">Os dados para criar o novo tipo de operação.</param>
         /// <returns>O tipo de operação criado.</returns>
         /// <response code="201">Retorna o tipo de operação recém-criado.</response>
-        /// <response code="400">Se os dados fornecidos forem inválidos (validação do DTO ou do serviço/middleware).</response>
-        /// <response code="409">Se houver conflito (ex: nome duplicado) (tratado pelo serviço/middleware).</response>
-        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
+        /// <response code="400">Se os dados fornecidos forem inválidos (validação do DTO ou tratado pelo middleware via ValidationException).</response>
+        /// <response code="409">Se houver conflito (ex: nome duplicado) (tratado pelo middleware via ConflictException).</response>
+        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente pelo middleware).</response>
         [HttpPost]
         [ProducesResponseType(typeof(OperationTypeDto), 201)]
         [ProducesResponseType(400)]
-        [ProducesResponseType(409)] // Adicionado para indicar possível conflito (nome duplicado)
-        [ProducesResponseType(500)] // Mantido para indicar que 500 é possível, mas tratado globalmente
+        [ProducesResponseType(409)]
+        [ProducesResponseType(500)]
         public async Task<ActionResult<OperationTypeDto>> Create([FromBody] CreateOperationTypeDto createDto)
         {
-            // Mantém a validação inicial do ModelState
             if (!ModelState.IsValid)
             {
                 return BadRequest(ModelState);
             }
 
-            // Removido try-catch genérico e tratamento específico de exceções de validação/negócio.
-            // Exceções lançadas pelo serviço (nome duplicado, etc.)
-            // serão tratadas por middleware global, retornando 400 ou 409.
             var createdOperationType = await _operationTypeService.CreateAsync(createDto);
 
             return CreatedAtAction(nameof(GetById), new { id = createdOperationType.Id, version = "1.0" }, createdOperationType);
@@ -110,38 +93,24 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
         /// <param name="updateDto">Os novos dados para o tipo de operação.</param>
         /// <returns>O tipo de operação atualizado.</returns>
         /// <response code="200">Retorna o tipo de operação atualizado.</response>
-        /// <response code="400">Se os dados fornecidos forem inválidos (validação do DTO ou do serviço/middleware).</response>
-        /// <response code="404">Se o tipo de operação não for encontrado (tratado pelo serviço/middleware).</response>
-        /// <response code="409">Se houver conflito (ex: nome duplicado) (tratado pelo serviço/middleware).</response>
-        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
+        /// <response code="400">Se os dados fornecidos forem inválidos (validação do DTO ou tratado pelo middleware).</response>
+        /// <response code="404">Se o tipo de operação não for encontrado (tratado pelo middleware via NotFoundException).</response>
+        /// <response code="409">Se houver conflito (ex: nome duplicado ou item inativo) (tratado pelo middleware via ConflictException).</response>
+        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente pelo middleware).</response>
         [HttpPut("{id}")]
         [ProducesResponseType(typeof(OperationTypeDto), 200)]
         [ProducesResponseType(400)]
         [ProducesResponseType(404)]
-        [ProducesResponseType(409)] // Adicionado para indicar possível conflito (nome duplicado)
-        [ProducesResponseType(500)] // Mantido para indicar que 500 é possível, mas tratado globalmente
+        [ProducesResponseType(409)]
+        [ProducesResponseType(500)]
         public async Task<IActionResult> Update(int id, [FromBody] UpdateOperationTypeDto updateDto)
         {
-            // Mantém a validação inicial do ModelState
             if (!ModelState.IsValid)
             {
                 return BadRequest(ModelState);
             }
 
-            // Removido try-catch genérico e tratamento específico de exceções de validação/negócio.
-            // Exceções lançadas pelo serviço (nome duplicado, item inativo, etc.)
-            // serão tratadas por middleware global, retornando 400 ou 409.
-            // O serviço UpdateAsync retornará null se não encontrar a entidade.
             var updatedOperationType = await _operationTypeService.UpdateAsync(id, updateDto);
-
-            if (updatedOperationType == null)
-            {
-                // O serviço UpdateAsync já retorna null se não encontrar.
-                // Se você implementar exceções customizadas no serviço (ex: NotFoundException),
-                // este 'if' pode ser removido e o middleware global cuidaria do 404.
-                _logger.LogWarning("Tipo de Operação com ID {Id} não encontrado para atualização.", id);
-                return NotFound($"Tipo de Operação com ID {id} não encontrado.");
-            }
 
             return Ok(updatedOperationType);
         }
@@ -152,29 +121,19 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1
         /// <param name="id">O ID do tipo de operação a ser desabilitado.</param>
         /// <returns>Nenhum conteúdo.</returns>
         /// <response code="204">Tipo de operação desabilitado com sucesso.</response>
-        /// <response code="404">Se o tipo de operação não for encontrado (tratado pelo serviço/middleware).</response>
-        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
+        /// <response code="404">Se o tipo de operação não for encontrado (tratado pelo middleware via NotFoundException).</response>
+        /// <response code="409">Se houver conflito (ex: dependências ativas) (tratado pelo middleware via ConflictException).</response>
+        /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente pelo middleware).</response>
         [HttpDelete("{id}")]
         [ProducesResponseType(204)]
         [ProducesResponseType(404)]
-        [ProducesResponseType(500)] // Mantido para indicar que 500 é possível, mas tratado globalmente
+        [ProducesResponseType(409)]
+        [ProducesResponseType(500)]
         public async Task<IActionResult> Delete(int id)
         {
-            // Removido try-catch genérico. Exceções lançadas pelo serviço
-            // serão tratadas por middleware global.
-            // O serviço DeleteAsync retornará false se não encontrar a entidade.
             var success = await _operationTypeService.DeleteAsync(id);
 
-            if (!success)
-            {
-                // O serviço DeleteAsync já retorna false se não encontrar.
-                // Se você implementar exceções customizadas no serviço (ex: NotFoundException),
-                // este 'if' pode ser removido e o middleware global cuidaria do 404.
-                _logger.LogWarning("Tipo de Operação com ID {Id} não encontrado para exclusão ou falha ao excluir.", id);
-                return NotFound($"Tipo de Operação com ID {id} não encontrado.");
-            }
-
-            return NoContent();
+            return NoContent(); // Retorna 204 se o serviço indicar sucesso (inclusive se já estava inativo)
         }
     }
 }

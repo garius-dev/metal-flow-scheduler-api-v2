@@ -25,6 +25,7 @@ using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
 using MetalFlowScheduler.Api.Helpers;
 using MetalFlowScheduler.Api.Extensions;
+using MetalFlowScheduler.Api.WebApi.Middleware;
 
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Debug()
@@ -281,7 +282,8 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-
+// --- Adiciona o middleware de tratamento de erros no início do pipeline ---
+app.UseErrorHandlingMiddleware();
 
 // --- Configuração do Serilog ---
 app.UseSerilogRequestLogging();

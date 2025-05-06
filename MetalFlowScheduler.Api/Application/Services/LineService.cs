@@ -1,9 +1,10 @@
-﻿using AutoMapper;
+﻿// Arquivo: Application/Services/LineService.cs
+using AutoMapper;
 using MetalFlowScheduler.Api.Application.Dtos;
 using MetalFlowScheduler.Api.Application.Interfaces;
 using MetalFlowScheduler.Api.Domain.Entities;
 using MetalFlowScheduler.Api.Domain.Interfaces;
-// using MetalFlowScheduler.Api.Application.Exceptions; // Para exceções customizadas (opcional)
+using MetalFlowScheduler.Api.Application.Exceptions; // Importar as exceções customizadas
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -52,7 +53,8 @@ namespace MetalFlowScheduler.Api.Application.Services
 
             if (line == null || !line.Enabled)
             {
-                return null;
+                // Lança NotFoundException se não encontrado ou inativo
+                throw new NotFoundException($"Linha com ID {id} não encontrada (ou inativa).");
             }
             return _mapper.Map<LineDto>(line);
         }
@@ -60,6 +62,7 @@ namespace MetalFlowScheduler.Api.Application.Services
         /// <inheritdoc/>
         public async Task<LineDto> CreateAsync(CreateLineDto createDto)
         {
+            // Validações lançarão ValidationException ou NotFoundException se falharem
             await ValidateWorkCentersAsync(createDto.WorkCenterIds);
             await ValidateProductsAsync(createDto.ProductIds);
 
@@ -70,7 +73,8 @@ namespace MetalFlowScheduler.Api.Application.Services
 
             if (existingActive != null)
             {
-                throw new Exception($"Já existe uma Linha ativa com o nome '{createDto.Name}'."); // TODO: Use ValidationException
+                // Viola R01 (nome único ativo) - Lança ConflictException
+                throw new ConflictException($"Já existe uma Linha ativa com o nome '{createDto.Name}'.");
             }
 
             Line lineToProcess;
@@ -78,7 +82,7 @@ namespace MetalFlowScheduler.Api.Application.Services
 
             if (existingInactive != null)
             {
-                // C11: Reativar e atualizar
+                // C11: Reativar e atualizar item inativo existente
                 lineToProcess = existingInactive;
                 var existingDetails = await _lineRepository.GetByIdWithDetailsAsync(lineToProcess.ID);
                 if (existingDetails != null)
@@ -133,7 +137,9 @@ namespace MetalFlowScheduler.Api.Application.Services
                 await _lineRepository.AddAsync(lineToProcess);
             }
 
-            return _mapper.Map<LineDto>(lineToProcess);
+            // Busca novamente para retornar o DTO com detalhes carregados (opcional, mas boa prática)
+            return await GetByIdAsync(lineToProcess.ID) ??
+                   throw new Exception("Falha inesperada ao buscar a linha recém-criada/atualizada."); // Should not happen if Add/Update succeeded
         }
 
         /// <inheritdoc/>
@@ -141,13 +147,19 @@ namespace MetalFlowScheduler.Api.Application.Services
         {
             var line = await _lineRepository.GetByIdWithDetailsAsync(id); // Carrega detalhes para C09
 
-            if (line == null) return null;
+            if (line == null)
+            {
+                // Lança NotFoundException se não encontrado
+                throw new NotFoundException($"Linha com ID {id} não encontrada.");
+            }
 
             if (!line.Enabled)
             {
-                throw new Exception($"Não é possível atualizar uma Linha inativa (ID: {id})."); // TODO: Use ValidationException
+                // Regra de negócio: não permitir atualizar inativos diretamente - Lança ConflictException
+                throw new ConflictException($"Não é possível atualizar uma Linha inativa (ID: {id}). Considere reativá-la primeiro.");
             }
 
+            // Validações lançarão ValidationException ou NotFoundException se falharem
             await ValidateWorkCentersAsync(updateDto.WorkCenterIds);
             await ValidateProductsAsync(updateDto.ProductIds);
 
@@ -159,7 +171,8 @@ namespace MetalFlowScheduler.Api.Application.Services
                     .FirstOrDefault();
                 if (conflictingLine != null)
                 {
-                    throw new Exception($"Já existe outra Linha ativa com o nome '{updateDto.Name}'."); // TODO: Use ValidationException
+                    // Lança ConflictException se houver conflito de nome
+                    throw new ConflictException($"Já existe outra Linha ativa com o nome '{updateDto.Name}'.");
                 }
             }
 
@@ -174,12 +187,14 @@ namespace MetalFlowScheduler.Api.Application.Services
             try
             {
                 await _lineRepository.UpdateAsync(line);
-                return _mapper.Map<LineDto>(line);
+                // Busca novamente para retornar o DTO com detalhes carregados
+                return await GetByIdAsync(line.ID);
             }
             catch (DbUpdateException ex)
             {
                 _logger.LogError(ex, "Erro ao atualizar linha ID {LineId} no banco de dados.", id);
-                throw; // Re-lança para tratamento global
+                // Re-lança para tratamento global no middleware
+                throw new Exception($"Falha ao salvar as alterações para a Linha com ID {id}.", ex);
             }
         }
 
@@ -187,20 +202,33 @@ namespace MetalFlowScheduler.Api.Application.Services
         public async Task<bool> DeleteAsync(int id)
         {
             var line = await _lineRepository.GetByIdAsync(id);
-            if (line == null) return false;
-            if (!line.Enabled) return true; // Já inativa
+            if (line == null)
+            {
+                // Lança NotFoundException se não encontrado
+                throw new NotFoundException($"Linha com ID {id} não encontrada para exclusão.");
+            }
 
-            // TODO: Adicionar validações de negócio antes de deletar
+            if (!line.Enabled) return true; // Já inativa, considera sucesso sem erro
+
+            // TODO: Adicionar validações de negócio antes de deletar (ex: verificar dependências ativas)
+            // Exemplo: Verificar se há WorkCenters ativos associados a esta linha
+            // var hasActiveWorkCenters = await _workCenterRepository.FindAsync(wc => wc.LineID == id && wc.Enabled);
+            // if (hasActiveWorkCenters.Any())
+            // {
+            //     throw new ConflictException($"Não é possível desabilitar a Linha ID {id} pois existem Centros de Trabalho ativos associados a ela.");
+            // }
+
 
             try
             {
-                await _lineRepository.SoftRemoveAsync(line);
+                await _lineRepository.SoftRemoveAsync(line); // Soft delete
                 return true;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Erro ao desabilitar linha ID {LineId}", id);
-                return false;
+                // Lança uma exceção genérica ou customizada se a falha for inesperada no repositório
+                throw new Exception($"Falha ao desabilitar a Linha com ID {id}.", ex);
             }
         }
 
@@ -208,42 +236,48 @@ namespace MetalFlowScheduler.Api.Application.Services
 
         /// <summary>
         /// Valida se todos os WorkCenter IDs existem e estão ativos.
+        /// Lança ValidationException ou NotFoundException se falhar.
         /// </summary>
-        private async Task<List<WorkCenter>> ValidateWorkCentersAsync(List<int> workCenterIds)
+        private async Task ValidateWorkCentersAsync(List<int> workCenterIds)
         {
             if (workCenterIds == null || !workCenterIds.Any())
             {
-                throw new Exception("A lista de IDs de Centro de Trabalho não pode ser vazia."); // TODO: Use ValidationException
+                throw new ValidationException(new Dictionary<string, string[]>
+                {
+                    { nameof(CreateLineDto.WorkCenterIds), new[] { "É necessário fornecer os IDs dos centros de trabalho." } }
+                });
             }
             var uniqueIds = workCenterIds.Distinct().ToList();
             var workCenters = await _workCenterRepository.FindAsync(wc => uniqueIds.Contains(wc.ID) && wc.Enabled);
             if (workCenters.Count() != uniqueIds.Count)
             {
                 var missingIds = uniqueIds.Except(workCenters.Select(wc => wc.ID));
-                throw new Exception($"Um ou mais IDs de Centro de Trabalho são inválidos ou inativos: {string.Join(", ", missingIds)}"); // TODO: Use ValidationException
+                // Lança ValidationException ou NotFoundException (dependendo da granularidade desejada)
+                throw new ValidationException($"Um ou mais IDs de Centro de Trabalho são inválidos ou inativos: {string.Join(", ", missingIds)}");
             }
-            return workCenters.ToList();
         }
 
         /// <summary>
         /// Valida se todos os Product IDs (se fornecidos) existem e estão ativos.
+        /// Lança ValidationException ou NotFoundException se falhar.
         /// </summary>
-        private async Task<List<Product>?> ValidateProductsAsync(List<int>? productIds)
+        private async Task ValidateProductsAsync(List<int>? productIds)
         {
-            if (productIds == null || !productIds.Any()) return null;
+            if (productIds == null || !productIds.Any()) return; // Lista opcional vazia ou nula é válida
 
             var uniqueIds = productIds.Distinct().ToList();
             var products = await _productRepository.FindAsync(p => uniqueIds.Contains(p.ID) && p.Enabled);
             if (products.Count() != uniqueIds.Count)
             {
                 var missingIds = uniqueIds.Except(products.Select(p => p.ID));
-                throw new Exception($"Um ou mais IDs de Produto são inválidos ou inativos: {string.Join(", ", missingIds)}"); // TODO: Use ValidationException
+                // Lança ValidationException ou NotFoundException
+                throw new ValidationException($"Um ou mais IDs de Produto são inválidos ou inativos: {string.Join(", ", missingIds)}");
             }
-            return products.ToList();
         }
 
         /// <summary>
         /// Gerencia a coleção de LineWorkCenterRoutes com base nos IDs fornecidos no DTO (C09).
+        /// Assume que a Line entidade já foi carregada com WorkCenterRoutes incluídas.
         /// </summary>
         private void ManageWorkCenterRoutes(Line line, List<int> workCenterIdsFromDto)
         {
@@ -251,11 +285,11 @@ namespace MetalFlowScheduler.Api.Application.Services
             var existingRouteWcIds = line.WorkCenterRoutes.Select(r => r.WorkCenterID).ToList();
             var dtoWcIds = workCenterIdsFromDto.Distinct().ToList();
 
-            // Rotas para remover
+            // Rotas para remover: as que existem na entidade mas não estão no DTO
             var routesToRemove = line.WorkCenterRoutes.Where(r => !dtoWcIds.Contains(r.WorkCenterID)).ToList();
             foreach (var route in routesToRemove) line.WorkCenterRoutes.Remove(route);
 
-            // IDs de WorkCenters para adicionar
+            // IDs de WorkCenters para adicionar: os que estão no DTO mas não existem na entidade
             var wcIdsToAdd = dtoWcIds.Except(existingRouteWcIds).ToList();
             int currentMaxOrder = line.WorkCenterRoutes.Any() ? line.WorkCenterRoutes.Max(r => r.Order) : 0;
             foreach (var wcId in wcIdsToAdd)
@@ -272,10 +306,14 @@ namespace MetalFlowScheduler.Api.Application.Services
                 };
                 line.WorkCenterRoutes.Add(newRoute);
             }
+
+            // Opcional: Atualizar a ordem das rotas existentes se a ordem for importante na lista do DTO
+            // Isso exigiria que o DTO de atualização passasse a ordem desejada para cada WorkCenterId
         }
 
         /// <summary>
         /// Gerencia a coleção de ProductAvailablePerLine com base nos IDs fornecidos no DTO (C09).
+        /// Assume que a Line entidade já foi carregada com AvailableProducts incluídos.
         /// </summary>
         private void ManageAvailableProducts(Line line, List<int>? productIdsFromDto)
         {
@@ -283,11 +321,11 @@ namespace MetalFlowScheduler.Api.Application.Services
             var existingAvailableProdIds = line.AvailableProducts.Select(ap => ap.ProductID).ToList();
             var dtoProdIds = productIdsFromDto?.Distinct().ToList() ?? new List<int>();
 
-            // Disponibilidades para remover
+            // Disponibilidades para remover: as que existem na entidade mas não estão no DTO
             var availabilityToRemove = line.AvailableProducts.Where(ap => !dtoProdIds.Contains(ap.ProductID)).ToList();
             foreach (var availability in availabilityToRemove) line.AvailableProducts.Remove(availability);
 
-            // IDs de Produtos para adicionar
+            // IDs de Produtos para adicionar: os que estão no DTO mas não existem na entidade
             var prodIdsToAdd = dtoProdIds.Except(existingAvailableProdIds).ToList();
             foreach (var prodId in prodIdsToAdd)
             {

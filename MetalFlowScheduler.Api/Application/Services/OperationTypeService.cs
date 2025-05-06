@@ -1,9 +1,10 @@
-﻿using AutoMapper;
+﻿// Arquivo: Application/Services/OperationTypeService.cs
+using AutoMapper;
 using MetalFlowScheduler.Api.Application.Dtos;
 using MetalFlowScheduler.Api.Application.Interfaces;
 using MetalFlowScheduler.Api.Domain.Entities;
 using MetalFlowScheduler.Api.Domain.Interfaces;
-// using MetalFlowScheduler.Api.Application.Exceptions; // Para exceções customizadas (opcional)
+using MetalFlowScheduler.Api.Application.Exceptions; // Importar as exceções customizadas
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -20,15 +21,18 @@ namespace MetalFlowScheduler.Api.Application.Services
         private readonly IOperationTypeRepository _operationTypeRepository;
         private readonly IMapper _mapper;
         private readonly ILogger<OperationTypeService> _logger;
+        // TODO: Adicionar repositórios para verificar dependências (ex: IOperationRepository)
 
         public OperationTypeService(
             IOperationTypeRepository operationTypeRepository,
             IMapper mapper,
-            ILogger<OperationTypeService> logger)
+            ILogger<OperationTypeService> logger
+            /* TODO: Adicionar repositórios injetados aqui para validações de dependência */)
         {
             _operationTypeRepository = operationTypeRepository ?? throw new ArgumentNullException(nameof(operationTypeRepository));
             _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            // TODO: Inicializar repositórios injetados
         }
 
         /// <inheritdoc/>
@@ -39,13 +43,14 @@ namespace MetalFlowScheduler.Api.Application.Services
         }
 
         /// <inheritdoc/>
-        public async Task<OperationTypeDto?> GetByIdAsync(int id)
+        public async Task<OperationTypeDto> GetByIdAsync(int id)
         {
             var operationType = await _operationTypeRepository.GetByIdAsync(id);
 
             if (operationType == null || !operationType.Enabled)
             {
-                return null; // Retorna null se não encontrado ou inativo
+                // Lança NotFoundException
+                throw new NotFoundException($"Tipo de Operação com ID {id} não encontrado (ou inativo).");
             }
             return _mapper.Map<OperationTypeDto>(operationType);
         }
@@ -60,8 +65,8 @@ namespace MetalFlowScheduler.Api.Application.Services
 
             if (existingActive != null)
             {
-                // Viola R01 (nome único ativo)
-                throw new Exception($"Já existe um Tipo de Operação ativo com o nome '{createDto.Name}'."); // TODO: Use ValidationException
+                // Viola R01 (nome único ativo) - Lança ConflictException
+                throw new ConflictException($"Já existe um Tipo de Operação ativo com o nome '{createDto.Name}'.");
             }
 
             OperationType operationTypeToProcess;
@@ -85,16 +90,20 @@ namespace MetalFlowScheduler.Api.Application.Services
         }
 
         /// <inheritdoc/>
-        public async Task<OperationTypeDto?> UpdateAsync(int id, UpdateOperationTypeDto updateDto)
+        public async Task<OperationTypeDto> UpdateAsync(int id, UpdateOperationTypeDto updateDto)
         {
             var operationType = await _operationTypeRepository.GetByIdAsync(id);
 
-            if (operationType == null) return null; // Não encontrado
+            if (operationType == null)
+            {
+                // Lança NotFoundException
+                throw new NotFoundException($"Tipo de Operação com ID {id} não encontrado.");
+            }
 
             if (!operationType.Enabled)
             {
-                // Regra de negócio: não permitir atualizar inativos diretamente
-                throw new Exception($"Não é possível atualizar um Tipo de Operação inativo (ID: {id})."); // TODO: Use ValidationException
+                // Regra de negócio: não permitir atualizar inativos diretamente - Lança ConflictException
+                throw new ConflictException($"Não é possível atualizar um Tipo de Operação inativo (ID: {id}). Considere reativá-lo primeiro.");
             }
 
             // R01: Verificar conflito de nome com outros registros ATIVOS
@@ -106,7 +115,8 @@ namespace MetalFlowScheduler.Api.Application.Services
 
                 if (conflictingOperationType != null)
                 {
-                    throw new Exception($"Já existe outro Tipo de Operação ativo com o nome '{updateDto.Name}'."); // TODO: Use ValidationException
+                    // Lança ConflictException se houver conflito de nome
+                    throw new ConflictException($"Já existe outro Tipo de Operação ativo com o nome '{updateDto.Name}'.");
                 }
             }
 
@@ -120,10 +130,21 @@ namespace MetalFlowScheduler.Api.Application.Services
         public async Task<bool> DeleteAsync(int id)
         {
             var operationType = await _operationTypeRepository.GetByIdAsync(id);
-            if (operationType == null) return false; // Não encontrado
-            if (!operationType.Enabled) return true; // Já inativo, considera sucesso
+            if (operationType == null)
+            {
+                // Lança NotFoundException
+                throw new NotFoundException($"Tipo de Operação com ID {id} não encontrado para exclusão.");
+            }
+
+            if (!operationType.Enabled) return true; // Já inativo, considera sucesso sem erro
 
             // TODO: Adicionar validações de negócio antes de deletar (ex: verificar dependências ativas)
+            // Exemplo de validação (requer injeção de IOperationRepository):
+            // var hasActiveOperations = await _operationRepository.FindAsync(op => op.OperationTypeID == id && op.Enabled);
+            // if (hasActiveOperations.Any())
+            // {
+            //     throw new ConflictException($"Não é possível desabilitar o Tipo de Operação ID {id} pois existem Operações ativas associadas a ele.");
+            // }
 
             try
             {
@@ -133,7 +154,8 @@ namespace MetalFlowScheduler.Api.Application.Services
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Erro ao desabilitar tipo de operação ID {OperationTypeId}", id);
-                return false; // Falha
+                // Lança uma exceção genérica ou customizada se a falha for inesperada no repositório
+                throw new Exception($"Falha ao desabilitar o Tipo de Operação com ID {id}.", ex);
             }
         }
     }

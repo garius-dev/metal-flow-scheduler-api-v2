@@ -1,6 +1,11 @@
-﻿using MetalFlowScheduler.Api.Domain.Entities;
+﻿// Arquivo: Infrastructure/Data/Repositories/OperationRepository.cs
+using MetalFlowScheduler.Api.Domain.Entities;
 using MetalFlowScheduler.Api.Domain.Interfaces;
 using MetalFlowScheduler.Api.Infrastructure.Data; // Para ApplicationDbContext
+using Microsoft.EntityFrameworkCore; // Para Include e ToListAsync
+using System.Collections.Generic; // Para IEnumerable
+using System.Linq; // Para Where
+using System.Threading.Tasks; // Para Task
 
 namespace MetalFlowScheduler.Api.Infrastructure.Data.Repositories
 {
@@ -15,13 +20,25 @@ namespace MetalFlowScheduler.Api.Infrastructure.Data.Repositories
         /// <param name="context">O contexto do banco de dados.</param>
         public OperationRepository(ApplicationDbContext context) : base(context) { }
 
-        // Métodos específicos para Operation podem ser adicionados aqui, se necessário.
-        // Exemplo: Implementação de um método para buscar operações com detalhes
-        // public async Task<IEnumerable<Operation>> GetAllEnabledWithDetailsAsync() {
-        //     return await _dbSet.Where(o => o.Enabled)
-        //                        .Include(o => o.OperationType)
-        //                        .Include(o => o.WorkCenter)
-        //                        .ToListAsync();
-        // }
+        /// <inheritdoc/>
+        public async Task<Operation?> GetByIdWithDetailsAsync(int id)
+        {
+            return await _dbSet
+                .Include(o => o.OperationType) // Inclui o Tipo de Operação associado
+                .Include(o => o.WorkCenter) // Inclui o Centro de Trabalho associado
+                .FirstOrDefaultAsync(o => o.ID == id); // Busca pelo ID
+        }
+
+        /// <inheritdoc/>
+        public async Task<IEnumerable<Operation>> GetAllEnabledWithDetailsAsync()
+        {
+            return await _dbSet
+                .Where(o => o.Enabled) // Filtra apenas os ativos
+                .Include(o => o.OperationType) // Inclui o Tipo de Operação associado
+                .Include(o => o.WorkCenter) // Inclui o Centro de Trabalho associado
+                .ToListAsync();
+        }
+
+        // Métodos herdados da classe base Repository<Operation>
     }
 }
