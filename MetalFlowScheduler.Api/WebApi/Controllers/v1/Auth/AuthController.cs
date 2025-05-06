@@ -95,7 +95,6 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1.Auth
             else
             {
                 // 400 Bad Request com erros do Identity (nome/email duplicado, senha fraca, etc.)
-                // Os erros do IdentityResult já contêm descrições amigáveis.
                 return BadRequest(result.Errors);
             }
         }
@@ -150,7 +149,7 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1.Auth
                 }
                 // Outros erros do Identity (ex: usuário já tem a role, etc.) retornam 400
                 _logger.LogWarning("Falha na atribuição de role para usuário ID {UserId}. Erros: {Errors}", request.UserId, string.Join(", ", result.Errors.Select(e => e.Description)));
-                return BadRequest(result.Errors); // Retorna os erros do IdentityResult
+                return BadRequest(result.Errors);
             }
         }
 
@@ -198,7 +197,7 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1.Auth
                 }
                 // Outros erros do Identity retornam 400
                 _logger.LogWarning("Falha na adição de claim para usuário ID {UserId}. Erros: {Errors}", request.UserId, string.Join(", ", result.Errors.Select(e => e.Description)));
-                return BadRequest(result.Errors); // Retorna os erros do IdentityResult
+                return BadRequest(result.Errors);
             }
         }
 
@@ -248,20 +247,19 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1.Auth
                 {
                     // 400 Bad Request - Alguma role na lista não foi encontrada
                     _logger.LogWarning("Falha na atualização de permissões: Alguma role não encontrada.");
-                    return BadRequest(result.Errors); // Retorna os erros do IdentityResult, que inclui qual role não foi encontrada
+                    return BadRequest(result.Errors);
                 }
                 if (result.Errors.Any(e => e.Code == "PermissionDenied"))
                 {
                     // 403 Forbidden - Lógica de restrição no serviço negou a operação
                     _logger.LogWarning("Falha na atualização de permissões: Permissão negada pelo serviço para usuário ID {UserId}.", request.UserId);
                     return StatusCode(403, "Você não tem permissão para atualizar as permissões deste usuário.");
-                    // Ou retornar os erros do IdentityResult que contêm a descrição do motivo da negação
-                    // return StatusCode(403, result.Errors);
+
                 }
 
                 // Outros erros do Identity retornam 400
                 _logger.LogWarning("Falha na atualização de permissões para usuário ID {UserId}. Erros: {Errors}", request.UserId, string.Join(", ", result.Errors.Select(e => e.Description)));
-                return BadRequest(result.Errors); // Retorna os erros do IdentityResult
+                return BadRequest(result.Errors);
             }
         }
 
@@ -312,12 +310,11 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1.Auth
                     // 403 Forbidden - Lógica de restrição no serviço negou a operação
                     _logger.LogWarning("Falha na remoção de role: Permissão negada pelo serviço para usuário ID {UserId}.", request.UserId);
                     return StatusCode(403, "Você não tem permissão para remover esta role deste usuário.");
-                    // Ou retornar os erros do IdentityResult que contêm a descrição do motivo da negação
-                    // return StatusCode(403, result.Errors);
+
                 }
                 // Outros erros do Identity retornam 400
                 _logger.LogWarning("Falha na remoção de role para usuário ID {UserId}. Erros: {Errors}", request.UserId, string.Join(", ", result.Errors.Select(e => e.Description)));
-                return BadRequest(result.Errors); // Retorna os erros do IdentityResult
+                return BadRequest(result.Errors);
             }
         }
 
@@ -361,7 +358,6 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1.Auth
                 {
                     // 404 Not Found - Usuário ou Claim específica não encontrada
                     _logger.LogWarning("Falha na remoção de claim: Usuário com ID {UserId} ou Claim '{ClaimType}:{ClaimValue}' não encontrados.", request.UserId, request.ClaimType, request.ClaimValue);
-                    // Retorna os erros do IdentityResult, que inclui qual não foi encontrado
                     return NotFound(result.Errors);
                 }
                 if (result.Errors.Any(e => e.Code == "PermissionDenied"))
@@ -369,12 +365,11 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1.Auth
                     // 403 Forbidden - Lógica de restrição no serviço negou a operação
                     _logger.LogWarning("Falha na remoção de claim: Permissão negada pelo serviço para usuário ID {UserId}.", request.UserId);
                     return StatusCode(403, "Você não tem permissão para remover claims deste usuário.");
-                    // Ou retornar os erros do IdentityResult que contêm a descrição do motivo da negação
-                    // return StatusCode(403, result.Errors);
+
                 }
-                // Outros erros do Identity retornam 400
+
                 _logger.LogWarning("Falha na remoção de claim para usuário ID {UserId}. Erros: {Errors}", request.UserId, string.Join(", ", result.Errors.Select(e => e.Description)));
-                return BadRequest(result.Errors); // Retorna os erros do IdentityResult
+                return BadRequest(result.Errors);
             }
         }
 
@@ -390,7 +385,7 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1.Auth
         /// <response code="404">Se o usuário não for encontrado.</response>
         /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
         [HttpGet("user-roles/{userId}")]
-        [Authorize(Policy = "CanAssignRoles")] // Política para quem pode VER roles de outros usuários
+        [Authorize(Policy = "CanAssignRoles")]
         [ProducesResponseType(typeof(IEnumerable<string>), 200)]
         [ProducesResponseType(400)]
         [ProducesResponseType(401)]
@@ -404,11 +399,10 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1.Auth
                 return BadRequest("ID de usuário inválido.");
             }
 
-            // Usando o novo método GetUserByIdAsync para verificar a existência antes de obter roles
             var user = await _authService.GetUserByIdAsync(userId);
             if (user == null)
             {
-                // 404 Not Found - Usuário não encontrado
+
                 _logger.LogWarning("Tentativa de obter roles de usuário não encontrado com ID {UserId}.", userId);
                 return NotFound($"Usuário com ID {userId} não encontrado.");
             }
@@ -430,7 +424,7 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1.Auth
         /// <response code="404">Se o usuário não for encontrado.</response>
         /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
         [HttpGet("user-claims/{userId}")]
-        [Authorize(Policy = "CanAssignRoles")] // Política para quem pode VER claims de outros usuários
+        [Authorize(Policy = "CanAssignRoles")]
         [ProducesResponseType(typeof(IList<Claim>), 200)]
         [ProducesResponseType(400)]
         [ProducesResponseType(401)]
@@ -444,11 +438,10 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1.Auth
                 return BadRequest("ID de usuário inválido.");
             }
 
-            // Usando o novo método GetUserByIdAsync para verificar a existência antes de obter claims
             var user = await _authService.GetUserByIdAsync(userId);
             if (user == null)
             {
-                // 404 Not Found - Usuário não encontrado
+
                 _logger.LogWarning("Tentativa de obter claims de usuário não encontrado com ID {UserId}.", userId);
                 return NotFound($"Usuário com ID {userId} não encontrado.");
             }
@@ -521,8 +514,8 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1.Auth
         /// <response code="403">Se o usuário autenticado não tiver permissão para remover usuários ou se a lógica de restrição de usuário alvo negar a operação.</response>
         /// <response code="404">Se o usuário não for encontrado.</response>
         /// <response code="500">Se ocorrer um erro inesperado no servidor (tratado globalmente).</response>
-        [HttpDelete("users/{userId}")] // Usando DELETE com ID na rota
-        [Authorize(Policy = "CanDeleteUsers")] // Política para quem pode DELETAR usuários
+        [HttpDelete("users/{userId}")]
+        [Authorize(Policy = "CanDeleteUsers")]
         [ProducesResponseType(200)]
         [ProducesResponseType(400)]
         [ProducesResponseType(401)]
@@ -556,8 +549,6 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1.Auth
                     // 403 Forbidden - Lógica de restrição no serviço negou a operação
                     _logger.LogWarning("Falha na remoção de usuário: Permissão negada pelo serviço para usuário ID {UserId}.", userId);
                     return StatusCode(403, "Você não tem permissão para remover este usuário.");
-                    // Ou retornar os erros do IdentityResult que contêm a descrição do motivo da negação
-                    // return StatusCode(403, result.Errors);
                 }
                 // Outros erros do Identity retornam 400
                 _logger.LogWarning("Falha na remoção de usuário com ID {UserId}. Erros: {Errors}", userId, string.Join(", ", result.Errors.Select(e => e.Description)));
@@ -579,20 +570,11 @@ namespace MetalFlowScheduler.Api.WebApi.Controllers.v1.Auth
         [ProducesResponseType(500)]
         public async Task<IActionResult> Logout()
         {
-            // Em uma API JWT stateless, a ação de logout é primariamente do lado do cliente
-            // (descartar o token). Este endpoint pode ser usado para:
-            // 1. Sinalizar ao servidor que o token não será mais usado.
-            // 2. Implementar lógica de revogação de token (adicionar JTI a uma lista negra).
-            // 3. Limpar cookies ou outras informações de sessão (se aplicável, mas menos comum com JWT puro).
-
-            // Chama o serviço de autenticação. Em uma implementação básica, ele não faz nada.
-            // Se você tiver lógica de revogação no serviço, ela será executada aqui.
+            
             await _authService.LogoutAsync();
 
             _logger.LogInformation("Usuário autenticado solicitou logout.");
 
-            // Retorna 200 OK para indicar que a requisição foi processada.
-            // A ação real de "deslogar" acontece quando o cliente descarta o token.
             return Ok("Logout bem-sucedido.");
         }
     }
